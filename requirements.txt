@@ -1,5 +1,4 @@
 aiogram==3.10.0
-httpx==0.28.1
 fastapi==0.111.1
 uvicorn==0.30.3
 python-multipart==0.0.9
@@ -9,3 +8,5 @@ psycopg2-binary==2.9.9
 algoliasearch==4.3.0
 python-dotenv==1.0.1
 aiofiles==23.2.1
+httpx==0.28.1
+uvloop
