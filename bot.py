@@ -26,8 +26,6 @@ from fastapi import FastAPI, BackgroundTasks, Request, HTTPException
 # --- Database aur Algolia Imports ---
 from database import Database, clean_text_for_search, AUTO_MESSAGE_ID_PLACEHOLDER
 import algolia_client
-# *** IMPORT CLEANUP ***
-# from algolia_client import is_algolia_ready (Ise hata diya gaya hai, seedha algolia_client.is_algolia_ready() use karein)
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(name)-12s %(message)s")
@@ -66,11 +64,10 @@ DB_SEMAPHORE = asyncio.Semaphore(10)
 if not BOT_TOKEN or not DATABASE_URL:
     logger.critical("Missing BOT_TOKEN or DATABASE_URL! Exiting.")
     raise SystemExit(1)
-# *** IMPORT CLEANUP ***
-if not algolia_client.is_algolia_ready():
-    logger.critical("Algolia environment variables (APP_ID, ADMIN_KEY, INDEX_NAME) missing or incorrect!")
-    # Hum bot ko band nahi karenge, lekin search fail hoga
-    # raise SystemExit(1) # Isko comment out rakhein taaki bot start ho sake
+    
+# Algolia check yahan zaroori nahi, woh client mein hota hai.
+# if not algolia_client.is_algolia_ready():
+#     logger.critical("Algolia environment variables (APP_ID, ADMIN_KEY, INDEX_NAME) missing or incorrect!")
 
 def build_webhook_url() -> str:
     base = RENDER_EXTERNAL_URL or PUBLIC_URL
@@ -101,10 +98,13 @@ def handler_timeout(timeout: int = HANDLER_TIMEOUT):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             try:
+                # Execution ko control yield karein taaki loop non-blocking rahe
+                await asyncio.sleep(0) 
                 return await asyncio.wait_for(func(*args, **kwargs), timeout=timeout)
             except asyncio.TimeoutError:
                 logger.error(f"Handler {func.__name__} timed out after {timeout}s")
                 try:
+                    # User ko timeout message bhejein
                     if args and isinstance(args[0], (types.Message, types.CallbackQuery)):
                         user_id = args[0].from_user.id
                         await bot.send_message(user_id, "⚠️ Request timeout - kripya dobara try karein. Server busy ho sakta hai.", parse_mode=ParseMode.HTML)
@@ -373,8 +373,7 @@ async def start_command(message: types.Message):
         movie_count = await safe_db_call(db.get_movie_count(), default=0)
         concurrent_users = await safe_db_call(db.get_concurrent_user_count(ACTIVE_WINDOW_MINUTES), default=0)
         
-        # *** IMPORT CLEANUP ***
-        algolia_status = "🟢 Connected" if algolia_client.is_algolia_ready() else "❌ NOT CONNECTED (Check .env)"
+        algolia_status = "🟢 Connected" if algolia_client.is_algolia_ready() else "❌ NOT CONNECTED (Search Slow/Broken)"
         
         admin_message = f"""👑 <b>Admin Console: @{bot_info.username}</b>
 Access Level: Full Management
@@ -393,7 +392,7 @@ Access Level: Full Management
 • /import_json — Reply to a .json file (Updates DB + Algolia)
 • /add_movie — Reply: /add_movie imdb | title | year (Updates DB + Algolia)
 • /remove_dead_movie IMDB_ID — (Updates DB + Algolia)
-• /sync_algolia — ⚠️ (FIX-IT) Force syncs DB to Algolia
+• <b>/sync_algolia</b> — ⚠️ Force syncs DB to Algolia (Use this to fix Algolia issues!)
 • /rebuild_index — (DB Only) Re-index clean_titles
 • /cleanup_users — Deactivate inactive users
 • /export_csv users|movies [limit]
@@ -428,7 +427,7 @@ async def help_command(message: types.Message):
     help_text = """❓ <b>Bot Ka Upyog Kaise Karein</b>
 
 1.  <b>Instant Search:</b> Movie/Show ka naam seedha message mein bhejein. (Example: <code>Jawan</code>)
-2.  <b>Typo Friendly:</b> Agar aap <code>Mirzapur</code> ke bajaye <code>Mirjapur</code> bhi likhenge, toh bhi bot search kar lega.
+2.  <b>Typo Friendly:</b> Agar aap <code>Mirzapur</code> ke bajaye <code>Mirjapur</code> bhi likhenge, toh bhi bot search kar lega. (Thanks to Algolia)
 3.  <b>Behtar Results:</b> Naam ke saath saal (year) jodein. (Example: <code>Pushpa 2021</code>)
 
 ⚠️ <b>Bot Slow Kyon Hai? (Sirf Start Hone Mein)</b>
@@ -462,7 +461,7 @@ Ab aap instant search access kar sakte hain — apni pasand ki title ka naam bhe
         if not result:
             await safe_tg_call(bot.send_message(callback.from_user.id, success_text, reply_markup=None))
     else:
-        await safe_tg_call(callback.message.answer("❌ Aapne abhi tak Channel/Group join nahi kiya hai. Kripya join karke dobara try karein.", show_alert=True))
+        await safe_tg_call(callback.answer("❌ Aapne abhi tak Channel/Group join nahi kiya hai. Kripya join karke dobara try karein.", show_alert=True))
 
 # =======================================================
 # +++++ ALGOLIA SEARCH HANDLER +++++
@@ -484,14 +483,13 @@ async def search_movie_handler(message: types.Message):
         await safe_tg_call(message.answer("🤔 Kripya kam se kam 2 characters ka query bhejein."))
         return
 
-    # Check karein ki Algolia chal raha hai ya nahi
-    # *** IMPORT CLEANUP ***
+    # Check karein ki Algolia chal raha hai ya nahi. Agar nahi, toh fail fast.
     if not algolia_client.is_algolia_ready():
-        logger.critical(f"User {user_id} search failed: Algolia client not ready (Check .env).")
-        await safe_tg_call(message.answer("❌ Bot mein Search Engine configure nahi hai. Admin se sampark karein."))
+        logger.warning(f"User {user_id} search failed: Algolia client not ready (Slow Search).")
+        await safe_tg_call(message.answer("❌ Search Engine configure nahi hai ya abhi kaam nahi kar raha hai. Admin se sampark karein."))
         return
 
-    searching_msg = await safe_tg_call(message.answer(f"⚡️ <b>{original_query}</b> ki khoj jaari hai..."))
+    searching_msg = await safe_tg_call(message.answer(f"⚡️ <b>{original_query}</b> ki khoj jaari hai... (Fast Algolia Search)"))
     if not searching_msg:
         return
     
@@ -518,6 +516,7 @@ async def get_movie_callback(callback: types.CallbackQuery):
     await safe_tg_call(callback.answer("File forward ki ja rahi hai…"))
     imdb_id = callback.data.split("_", 1)[1]
     
+    # ✅ FIX: capacity check mein message object use karein
     if not await ensure_capacity_or_inform(callback.message):
         return
         
@@ -582,7 +581,7 @@ async def stats_command(message: types.Message):
     user_count = await safe_db_call(db.get_user_count(), default=0)
     movie_count = await safe_db_call(db.get_movie_count(), default=0)
     concurrent_users = await safe_db_call(db.get_concurrent_user_count(ACTIVE_WINDOW_MINUTES), default=0)
-    # *** IMPORT CLEANUP ***
+    
     algolia_status = "🟢 Connected" if algolia_client.is_algolia_ready() else "❌ NOT CONNECTED"
     
     stats_msg = f"""📊 <b>Live System Statistics</b>
@@ -624,6 +623,8 @@ async def broadcast_command(message: types.Message):
                 await safe_tg_call(progress_msg.edit_text(f"""📤 Broadcasting…
 ✅ Sent: {success} | ❌ Failed (or Blocked): {failed} | ⏳ Total: {total_users}"""))
             except TelegramBadRequest: pass
+            
+        # ✅ FIX: Small sleep to prevent event loop from blocking during the broadcast loop
         await asyncio.sleep(0.05) 
         
     if progress_msg:
@@ -806,7 +807,7 @@ async def remove_dead_movie_command(message: types.Message):
         await safe_tg_call(message.answer(f"❌ DB se remove karne mein error."))
 
 # =======================================================
-# +++++ NEW ADMIN COMMAND: /sync_algolia +++++
+# +++++ NEW ADMIN COMMAND: /sync_algolia (Must be present in bot.py) +++++
 # =======================================================
 @dp.message(Command("sync_algolia"), AdminFilter())
 @handler_timeout(1800) # 30 min
@@ -815,7 +816,6 @@ async def sync_algolia_command(message: types.Message):
     Yeh "Fix-it" button hai.
     Yeh poore PostgreSQL DB ko padhega aur Algolia index ko overwrite kar dega.
     """
-    # *** IMPORT CLEANUP ***
     if not algolia_client.is_algolia_ready():
         await safe_tg_call(message.answer("❌ Algolia client configure nahi hai. .env check karein."))
         return
