@@ -26,9 +26,6 @@ def clean_text_for_search(text: str) -> str:
     return text.strip()
 
 # ============ DATABASE MODELS (PostgreSQL) ============
-# Yeh ab hamara "Source of Truth" (master data) hai.
-# Algolia sirf search ke liye istemaal hoga.
-
 class User(Base):
     __tablename__ = 'users'
     user_id = Column(BigInteger, primary_key=True)
@@ -90,7 +87,6 @@ class Database:
             logger.error(f"Critical DB error detected: {type(e).__name__}. Re-initializing engine.", exc_info=True)
             try:
                 await self.engine.dispose()
-                # ... (Engine recreation logic yahaan add kar sakte hain, par simple rakhte hain) ...
                 logger.info("DB engine disposed. New connections will be created.")
                 return True
             except Exception as re_e:
@@ -196,15 +192,10 @@ class Database:
             logger.error(f"get_movie_by_imdb error: {e}", exc_info=True)
             return None
 
-    # =======================================================
-    # +++++ SEARCH FUNCTION AB USE NAHI HOGA +++++
-    # =======================================================
     # async def super_search_movies_advanced(self, query: str, limit: int = 20) -> List[Dict]:
-    #     # YEH FUNCTION AB ALGOLIA SE REPLACE HO GAYA HAI
-    #     # Ise delete kar sakte hain ya aise hi chhod sakte hain
-    #     logger.info("Local DB search called (should be Algolia)")
+    #     # YEH FUNCTION AB ALGOLIA SE REPLACE HO GAYA HAI AUR USE NAHI HOGA
+    #     logger.info("Local DB search called (deprecated).")
     #     return []
-    # =======================================================
 
     async def add_movie(self, imdb_id: str, title: str, year: str, file_id: str, message_id: int, channel_id: int):
         """Movie ko DB mein add karein."""
