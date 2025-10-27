@@ -1,10 +1,11 @@
 import os
 import logging
 from typing import List, Dict, Tuple
-from algoliasearch.search_client import SearchClient
+from algoliasearch.search.client import SearchClient  # ✅ YAHAN CHANGE HAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
 logger = logging.getLogger("bot.algolia")
 
 ALGOLIA_APP_ID = os.getenv("ALGOLIA_APP_ID")
@@ -22,13 +23,12 @@ else:
         index = client.init_index(ALGOLIA_INDEX_NAME)
         
         # Index settings (Typo tolerance enable karein)
-        # Yeh settings Algolia dashboard se bhi ki ja sakti hain
         index.set_settings({
-            'minWordSizefor1Typo': 4,      # 4 akshar ke baad 1 typo maaf
-            'minWordSizefor2Typos': 8,     # 8 akshar ke baad 2 typo maaf
-            'hitsPerPage': 20,             # Default 20 result
-            'attributesForFaceting': ['year'], # 'year' ke hisaab se filter kar sakte hain
-            'searchableAttributes': ['title', 'imdb_id'] # In do cheezon par search karein
+            'minWordSizefor1Typo': 4,
+            'minWordSizefor2Typos': 8,
+            'hitsPerPage': 20,
+            'attributesForFaceting': ['year'],
+            'searchableAttributes': ['title', 'imdb_id']
         })
         logger.info(f"Algolia client initialized. Index: '{ALGOLIA_INDEX_NAME}'")
     except Exception as e:
@@ -45,16 +45,14 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
     if not is_algolia_ready():
         logger.error("Algolia not ready, cannot perform search.")
         return []
-        
+    
     try:
-        # Algolia ka async search function use karein
         results = await index.search_async(query, {'hitsPerPage': limit})
-        
         formatted_hits = []
         for hit in results.get('hits', []):
             formatted_hits.append({
-                'imdb_id': hit['objectID'], # objectID hi hamara imdb_id hai
-                'title': hit.get('title', 'N/A') # Title extract karein
+                'imdb_id': hit['objectID'],
+                'title': hit.get('title', 'N/A')
             })
         return formatted_hits
     except Exception as e:
@@ -68,10 +66,8 @@ async def algolia_add_movie(movie_data: dict):
         return False
     
     try:
-        # movie_data mein 'objectID' hona zaroori hai
         if 'objectID' not in movie_data:
             movie_data['objectID'] = movie_data['imdb_id']
-            
         await index.save_object_async(movie_data)
         logger.info(f"Successfully added/updated object in Algolia: {movie_data['objectID']}")
         return True
@@ -80,20 +76,18 @@ async def algolia_add_movie(movie_data: dict):
         return False
 
 async def algolia_add_batch_movies(movies_list: List[dict]):
-    """Bahut saari movies ko ek saath Algolia mein add karein (JSON import ke liye)."""
+    """Bahut saari movies ko ek saath Algolia mein add karein."""
     if not is_algolia_ready():
         logger.warning("Algolia not ready, skipping add_batch_movies")
         return False
-        
+    
     if not movies_list:
-        return True # Kuch add karne ko nahi hai
-        
+        return True
+    
     try:
-        # Ensure objectID is set for all
         for movie in movies_list:
             if 'objectID' not in movie:
                 movie['objectID'] = movie.get('imdb_id')
-        
         await index.save_objects_async(movies_list)
         logger.info(f"Successfully added {len(movies_list)} objects to Algolia in batch.")
         return True
@@ -106,9 +100,8 @@ async def algolia_remove_movie(imdb_id: str):
     if not is_algolia_ready():
         logger.warning("Algolia not ready, skipping remove_movie")
         return False
-        
+    
     try:
-        # 'imdb_id' hi hamara 'objectID' hai
         await index.delete_object_async(imdb_id)
         logger.info(f"Successfully deleted object from Algolia: {imdb_id}")
         return True
@@ -121,6 +114,7 @@ async def algolia_clear_index():
     if not is_algolia_ready():
         logger.warning("Algolia not ready, skipping clear_index")
         return False
+    
     try:
         await index.clear_objects_async()
         logger.info(f"Successfully cleared Algolia index: {ALGOLIA_INDEX_NAME}")
@@ -137,41 +131,29 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     if not is_algolia_ready():
         logger.error("Algolia not ready, cannot perform sync.")
         return False, 0
-        
+    
     if not all_movies_data:
-        # Agar DB khaali hai, toh index clear kar dein
         await algolia_clear_index()
         return True, 0
-
+    
     try:
         total_uploaded = 0
-        batch_size = 1000 # Algolia ki recommendation
-        
+        batch_size = 1000
         logger.info(f"Sync: Starting upload of {len(all_movies_data)} objects in batches of {batch_size}...")
         
         for i in range(0, len(all_movies_data), batch_size):
             batch = all_movies_data[i:i + batch_size]
             
-            # Pehla batch index ko clear karega, baaki ke add honge
-            # NOTE: Algolia 'replace_all_objects' ki jagah 'save_objects' use karta hai
-            # Pehle batch ke liye 'clearExistingIndex: True' bhejte hain
-            
             if i == 0:
-                # Pehla batch: Purana data delete karega aur naya daalega
-                # *** BUG FIX YAHAN HAI ***
-                # Parameter {'clearExistingIndex': True} ke bajaye clear_existing_index=True hona chahiye
                 await index.save_objects_async(batch, clear_existing_index=True)
             else:
-                # Baaki ke batch: Sirf naya data daalenge
-                # *** BUG FIX YAHAN HAI ***
                 await index.save_objects_async(batch, clear_existing_index=False)
-
+            
             total_uploaded += len(batch)
             logger.info(f"Sync: Uploaded {total_uploaded}/{len(all_movies_data)} objects...")
         
         logger.info("Sync: Full sync to Algolia complete.")
         return True, total_uploaded
-        
     except Exception as e:
         logger.error(f"Failed during Algolia sync (algolia_sync_data): {e}", exc_info=True)
         return False, 0
