@@ -19,6 +19,9 @@ from typing import List, Dict
 from functools import wraps
 import concurrent.futures
 
+# --- FastAPI Import (YAHAN FIX HUA) ---
+from fastapi import FastAPI, BackgroundTasks, Request, HTTPException
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandStart, BaseFilter
 from aiogram.types import Update, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
