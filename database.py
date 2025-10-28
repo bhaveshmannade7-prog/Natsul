@@ -197,28 +197,50 @@ class Database:
     #     logger.info("Local DB search called (deprecated).")
     #     return []
 
+    # FIX 2: add_movie ko update/insert (upsert) logic ke liye modify kiya gaya
     async def add_movie(self, imdb_id: str, title: str, year: str, file_id: str, message_id: int, channel_id: int):
-        """Movie ko DB mein add karein."""
+        """Movie ko DB mein add ya update karein (Upsert logic)."""
         session = None
         try:
             async with self.SessionLocal() as session:
+                # Pehle check karein ki movie file_id ya imdb_id se exist karti hai ya nahi
+                stmt = select(Movie).where(or_(Movie.imdb_id == imdb_id, Movie.file_id == file_id))
+                result = await session.execute(stmt)
+                movie = result.scalar_one_or_none()
+                
                 clean = clean_text_for_search(title)
-                movie = Movie(
-                    imdb_id=imdb_id, title=title, clean_title=clean, year=year,
-                    file_id=file_id, message_id=message_id, channel_id=channel_id
-                )
-                session.add(movie)
-                await session.commit()
-                return True 
+                
+                if movie:
+                    # Movie mili - Update karein
+                    movie.imdb_id = imdb_id  # Ensure imdb_id is updated (agar file_id se match hua)
+                    movie.title = title
+                    movie.clean_title = clean
+                    movie.year = year
+                    movie.message_id = message_id
+                    movie.channel_id = channel_id
+                    movie.file_id = file_id # Ensure file_id is updated (agar imdb_id se match hua)
+                    await session.commit()
+                    return "updated"
+                else:
+                    # Movie nahi mili - Nayi add karein
+                    movie = Movie(
+                        imdb_id=imdb_id, title=title, clean_title=clean, year=year,
+                        file_id=file_id, message_id=message_id, channel_id=channel_id
+                    )
+                    session.add(movie)
+                    await session.commit()
+                    return True 
         except IntegrityError as e:
             if session: await session.rollback()
-            logger.warning(f"Duplicate entry skipped: {title} (IMDB: {imdb_id} or FileID: {file_id}).")
+            # Yeh tabhi hoga jab race condition ho (do ek saath add karein)
+            logger.warning(f"Duplicate entry skipped (IntegrityError): {title} (IMDB: {imdb_id} or FileID: {file_id}).")
             return "duplicate" 
         except Exception as e:
             if session: await session.rollback()
             if await self._handle_db_error(e): # Retry logic
                 await asyncio.sleep(1)
-                return await self.add_movie(imdb_id, title, year, file_id, message_id, channel_id) # Sirf ek baar retry
+                # Sirf ek baar retry
+                return await self.add_movie(imdb_id, title, year, file_id, message_id, channel_id) 
             logger.error(f"add_movie error: {e}", exc_info=True)
             return False
 
