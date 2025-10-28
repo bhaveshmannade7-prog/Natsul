@@ -1,14 +1,24 @@
 import os
 import logging
 from typing import List, Dict, Tuple
-from algoliasearch.search.client import SearchClient # Correct import for v4+
+import algoliasearch # Import the base library to check version
+from algoliasearch.search.client import SearchClient # v4+ import
+# For older versions (v2/v3), the client was often imported differently,
+# but SearchClient might exist with different methods. We'll handle via try/except.
 from dotenv import load_dotenv
 import asyncio
 
-# Load dotenv VERY early, although it should be loaded by bot.py first
+# Load dotenv VERY early
 load_dotenv()
 
 logger = logging.getLogger("bot.algolia")
+
+# Log the detected version
+try:
+    logger.info(f"Detected algoliasearch version: {algoliasearch.__version__}")
+except Exception as e:
+    logger.warning(f"Could not detect algoliasearch version: {e}")
+
 
 ALGOLIA_APP_ID = os.getenv("ALGOLIA_APP_ID")
 ALGOLIA_ADMIN_KEY = os.getenv("ALGOLIA_ADMIN_KEY")
@@ -18,11 +28,10 @@ client = None
 index = None
 _is_ready = False # Internal flag
 
-async def _initialize_algolia_async():
-    """Asynchronous function to initialize Algolia."""
+async def initialize_algolia():
+    """Tries to initialize the Algolia client and index asynchronously."""
     global client, index, _is_ready
-    if _is_ready: # Avoid re-initializing
-        return True
+    if _is_ready: return True # Already initialized
 
     if not ALGOLIA_APP_ID or not ALGOLIA_ADMIN_KEY or not ALGOLIA_INDEX_NAME:
         logger.critical("Algolia environment variables missing (APP_ID, ADMIN_KEY, or INDEX_NAME). Cannot initialize.")
@@ -31,215 +40,196 @@ async def _initialize_algolia_async():
 
     logger.info("Attempting to initialize Algolia client...")
     try:
-        # Correct initialization for v4+
-        client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
-        index = client.init_index(ALGOLIA_INDEX_NAME)
-        logger.info(f"Algolia client created for App ID: {ALGOLIA_APP_ID}, Index: {ALGOLIA_INDEX_NAME}")
+        # --- Compatibility Fix ---
+        # Try v4 initialization first
+        try:
+            client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+            index = client.init_index(ALGOLIA_INDEX_NAME)
+            logger.info(f"Algolia client initialized using v4+ syntax (SearchClient). App ID: {ALGOLIA_APP_ID}")
+        except AttributeError:
+             logger.warning("'SearchClient' object has no attribute 'init_index'. Falling back to older Algolia client syntax (v2/v3). Ensure algoliasearch version >= 4.0 is installed for best results.")
+             # Fallback for older versions (v2/v3 might use this - untested directly but plausible)
+             # Note: The async client might have been separate in older versions.
+             # This fallback assumes a sync client was available at the top level import.
+             # If using v2/v3 async, the import and usage would be different.
+             # This primarily handles the case where Render installs an old SYNC version unexpectedly.
+             from algoliasearch import algoliasearch as old_algoliasearch
+             sync_client = old_algoliasearch.Client(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+             index = sync_client.init_index(ALGOLIA_INDEX_NAME)
+             client = sync_client # Store the sync client reference
+             logger.info(f"Algolia client initialized using v2/v3 fallback syntax. App ID: {ALGOLIA_APP_ID}")
+             # Add a warning that async methods might fail if using fallback
+             logger.warning("Using older Algolia client fallback - async methods may not be available or may behave differently.")
+        except Exception as init_err:
+             logger.critical(f"Unexpected error during Algolia client creation: {init_err}", exc_info=True)
+             _is_ready = False
+             return False
+        # --- End Compatibility Fix ---
 
-        # Basic check to confirm connection and permissions by getting settings
-        logger.info("Fetching Algolia index settings to confirm connection...")
-        await index.get_settings_async()
-        logger.info("Successfully fetched index settings.")
 
-        # Apply desired index settings asynchronously
-        logger.info("Applying Algolia index settings...")
-        await index.set_settings_async({
-            'minWordSizefor1Typo': 3,
-            'minWordSizefor2Typos': 7,
-            'hitsPerPage': 20,
-            'searchableAttributes': [
-                'title', # Make title primary
-                'imdb_id',
-                'year'
-            ],
-            'queryType': 'prefixLast', # Allow searching prefixes
-            'attributesForFaceting': ['searchable(year)'], # Make year searchable for filtering
-            'typoTolerance': 'min',
-            'removeStopWords': True,
-            'ignorePlurals': True,
-        }, request_options={'timeout': 10}) # Add timeout for settings apply
-        logger.info("Successfully applied Algolia index settings.")
+        logger.info(f"Using Algolia Index: {ALGOLIA_INDEX_NAME}")
 
-        _is_ready = True
-        logger.info("Algolia initialization successful.")
-        return True
+        # Check connection and apply settings (use async methods if possible)
+        logger.info("Fetching/Applying Algolia index settings...")
+        settings_to_apply = {
+            'minWordSizefor1Typo': 3, 'minWordSizefor2Typos': 7, 'hitsPerPage': 20,
+            'searchableAttributes': ['title', 'imdb_id', 'year'],
+            'queryType': 'prefixLast', 'attributesForFaceting': ['searchable(year)'],
+            'typoTolerance': 'min', 'removeStopWords': True, 'ignorePlurals': True,
+        }
+        try:
+            # Prefer async methods
+            if hasattr(index, 'set_settings_async'):
+                await index.set_settings_async(settings_to_apply, request_options={'timeout': 10})
+                await index.get_settings_async(request_options={'timeout': 5}) # Confirm connection
+                logger.info("Applied settings using async methods.")
+            # Fallback to sync methods if using older client
+            elif hasattr(index, 'set_settings'):
+                 logger.warning("Using synchronous set_settings fallback.")
+                 index.set_settings(settings_to_apply)
+                 index.get_settings() # Sync confirmation
+                 logger.info("Applied settings using sync methods.")
+            else:
+                 logger.error("Could not find set_settings method on index object.")
+                 _is_ready = False
+                 return False
+
+            _is_ready = True
+            logger.info("Algolia initialization and settings apply successful.")
+            return True
+
+        except Exception as settings_err:
+            logger.critical(f"Failed to apply/verify Algolia settings: {settings_err}", exc_info=True)
+            _is_ready = False
+            return False
 
     except Exception as e:
-        logger.critical(f"Failed to initialize Algolia client or apply settings: {e}", exc_info=True)
+        # Catch errors during client creation itself
+        logger.critical(f"Critical failure during Algolia client initialization: {e}", exc_info=True)
         client = None
         index = None
         _is_ready = False
         return False
 
-# --- Synchronous Initialization Block ---
-# Try to run the async initialization synchronously when the module is loaded.
-# This makes the startup depend on Algolia connection success.
-try:
-    logger.info("Running synchronous Algolia initialization...")
-    # Get a running loop or create a new one for initialization
-    try:
-        loop = asyncio.get_running_loop()
-        # If loop is running, create task (might happen during testing/specific setups)
-        # However, typically at import time, no loop is running.
-        # This path is less common during standard startup.
-        logger.warning("Event loop already running during Algolia init. Creating task.")
-        init_task = loop.create_task(_initialize_algolia_async())
-        # Note: We don't wait here as the loop is already managed elsewhere.
-        # _is_ready will be set later by the task. This might lead to race conditions.
-        # Preferring asyncio.run() below.
-    except RuntimeError: # No running event loop
-        logger.info("No running event loop found, using asyncio.run() for Algolia init.")
-        asyncio.run(_initialize_algolia_async())
-
-except Exception as e:
-    logger.critical(f"Critical error during synchronous Algolia initialization setup: {e}", exc_info=True)
-    _is_ready = False
-# --- End Initialization Block ---
-
 
 def is_algolia_ready():
     """Check if Algolia client and index were successfully initialized."""
-    if not _is_ready:
-        # Avoid logging this warning every time if init failed permanently
-        # logger.warning("is_algolia_ready called, but initialization failed or hasn't completed.")
-        pass
+    # This function now just returns the flag set by initialize_algolia
     return _is_ready and client is not None and index is not None
 
-async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
-    """Search Algolia asynchronously."""
-    if not is_algolia_ready():
-        logger.error("Algolia not ready, cannot perform search.")
-        return []
+# --- Async Wrappers for Algolia Operations ---
+# These wrappers check _is_ready and prefer async methods, with sync fallbacks if needed
 
+async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
+    if not is_algolia_ready(): logger.error("Algolia not ready for search."); return []
     try:
-        results = await index.search_async(query, {'hitsPerPage': limit})
-        formatted_hits = []
-        for hit in results.get('hits', []):
-            if 'objectID' in hit:
-                 formatted_hits.append({
-                     'imdb_id': hit['objectID'],
-                     'title': hit.get('title', 'N/A')
-                 })
-            else:
-                 logger.warning(f"Algolia hit missing objectID: {hit}")
-        return formatted_hits
+        if hasattr(index, 'search_async'):
+            results = await index.search_async(query, {'hitsPerPage': limit})
+        elif hasattr(index, 'search'): # Sync fallback
+             logger.warning("Using synchronous search fallback.")
+             results = index.search(query, {'hitsPerPage': limit})
+        else: raise RuntimeError("No search method found")
+
+        hits = results.get('hits', [])
+        return [{'imdb_id': hit['objectID'], 'title': hit.get('title', 'N/A')} for hit in hits if 'objectID' in hit]
     except Exception as e:
-        logger.error(f"Failed to search Algolia for query '{query}': {e}", exc_info=True)
+        logger.error(f"Algolia search failed for '{query}': {e}", exc_info=True)
         return []
 
 async def algolia_add_movie(movie_data: dict) -> bool:
-    """Add/update a single movie in Algolia (Upsert)."""
-    if not is_algolia_ready():
-        logger.warning("Algolia not ready, skipping add_movie")
-        return False
+    if not is_algolia_ready(): logger.warning("Algolia not ready for add_movie."); return False
     if 'objectID' not in movie_data or not movie_data['objectID']:
-        if 'imdb_id' in movie_data and movie_data['imdb_id']:
-            movie_data['objectID'] = movie_data['imdb_id']
-        else:
-            logger.error(f"Cannot add movie to Algolia: Missing objectID/imdb_id. Data: {movie_data}")
-            return False
-
+         if 'imdb_id' in movie_data and movie_data['imdb_id']: movie_data['objectID'] = movie_data['imdb_id']
+         else: logger.error(f"Missing objectID/imdb_id for Algolia add: {movie_data}"); return False
     try:
-        await index.save_object_async(movie_data)
+        if hasattr(index, 'save_object_async'):
+            await index.save_object_async(movie_data)
+        elif hasattr(index, 'save_object'): # Sync fallback
+             logger.warning("Using synchronous save_object fallback.")
+             index.save_object(movie_data)
+        else: raise RuntimeError("No save_object method found")
         return True
     except Exception as e:
-        logger.error(f"Failed to add/update object {movie_data.get('objectID', 'N/A')} to Algolia: {e}", exc_info=True)
+        logger.error(f"Algolia save_object failed for {movie_data.get('objectID', 'N/A')}: {e}", exc_info=True)
         return False
 
 async def algolia_add_batch_movies(movies_list: List[dict]) -> bool:
-    """Add/update multiple movies in Algolia (Batch Upsert)."""
-    if not is_algolia_ready():
-        logger.warning("Algolia not ready, skipping add_batch_movies")
-        return False
-    if not movies_list:
-        logger.info("algolia_add_batch_movies called with empty list.")
-        return True
-
+    if not is_algolia_ready(): logger.warning("Algolia not ready for add_batch."); return False
+    if not movies_list: return True
     valid_movies = []
-    for movie in movies_list:
-        if 'objectID' not in movie or not movie['objectID']:
-             if 'imdb_id' in movie and movie['imdb_id']:
-                 movie['objectID'] = movie['imdb_id']
-             else:
-                 logger.warning(f"Skipping movie in batch: Missing objectID/imdb_id. Data: {movie}")
-                 continue
-        valid_movies.append(movie)
-
-    if not valid_movies:
-         logger.warning("No valid movies found in batch after checking for objectID.")
-         return False
-
+    for m in movies_list:
+        if 'objectID' not in m or not m['objectID']:
+            if 'imdb_id' in m and m['imdb_id']: m['objectID'] = m['imdb_id']
+            else: logger.warning(f"Skipping batch item (no ID): {m}"); continue
+        valid_movies.append(m)
+    if not valid_movies: logger.warning("No valid items in batch."); return False
     try:
-        await index.save_objects_async(valid_movies, {"batchSize": 1000})
-        logger.info(f"Successfully processed {len(valid_movies)} objects in Algolia batch.")
+        if hasattr(index, 'save_objects_async'):
+            await index.save_objects_async(valid_movies, {"batchSize": 1000})
+        elif hasattr(index, 'save_objects'): # Sync fallback
+             logger.warning("Using synchronous save_objects fallback.")
+             index.save_objects(valid_movies, {"batchSize": 1000})
+        else: raise RuntimeError("No save_objects method found")
+        logger.info(f"Algolia batch processed {len(valid_movies)} items.")
         return True
     except Exception as e:
-        logger.error(f"Failed to process batch in Algolia: {e}", exc_info=True)
+        logger.error(f"Algolia save_objects failed: {e}", exc_info=True)
         return False
 
 async def algolia_remove_movie(imdb_id: str) -> bool:
-    """Delete a movie from Algolia index by its objectID (imdb_id)."""
-    if not is_algolia_ready():
-        logger.warning("Algolia not ready, skipping remove_movie")
-        return False
-    if not imdb_id:
-        logger.warning("Algolia remove_movie called with empty imdb_id.")
-        return False
-
+    if not is_algolia_ready(): logger.warning("Algolia not ready for remove_movie."); return False
+    if not imdb_id: return False
     try:
-        await index.delete_object_async(imdb_id)
-        logger.info(f"Successfully submitted delete request for object from Algolia: {imdb_id}")
+        if hasattr(index, 'delete_object_async'):
+            await index.delete_object_async(imdb_id)
+        elif hasattr(index, 'delete_object'): # Sync fallback
+             logger.warning("Using synchronous delete_object fallback.")
+             index.delete_object(imdb_id)
+        else: raise RuntimeError("No delete_object method found")
+        logger.info(f"Algolia delete request for {imdb_id} submitted.")
         return True
     except Exception as e:
-        if 'ObjectID does not exist' in str(e):
-             logger.info(f"Object {imdb_id} already deleted or never existed in Algolia.")
-             return True
-        logger.error(f"Failed to delete object {imdb_id} from Algolia: {e}", exc_info=True)
+        if 'ObjectID does not exist' in str(e): logger.info(f"Algolia: {imdb_id} already deleted."); return True
+        logger.error(f"Algolia delete_object failed for {imdb_id}: {e}", exc_info=True)
         return False
 
 async def algolia_clear_index() -> bool:
-    """Clear all objects from the Algolia index."""
-    if not is_algolia_ready():
-        logger.warning("Algolia not ready, skipping clear_index")
-        return False
-
+    if not is_algolia_ready(): logger.warning("Algolia not ready for clear_index."); return False
     try:
-        await index.clear_objects_async()
-        logger.info(f"Successfully cleared Algolia index: {ALGOLIA_INDEX_NAME}")
+        if hasattr(index, 'clear_objects_async'):
+            await index.clear_objects_async()
+        elif hasattr(index, 'clear_objects'): # Sync fallback
+             logger.warning("Using synchronous clear_objects fallback.")
+             index.clear_objects()
+        else: raise RuntimeError("No clear_objects method found")
+        logger.info(f"Algolia index '{ALGOLIA_INDEX_NAME}' cleared.")
         return True
     except Exception as e:
-        logger.error(f"Failed to clear Algolia index {ALGOLIA_INDEX_NAME}: {e}", exc_info=True)
+        logger.error(f"Algolia clear_objects failed: {e}", exc_info=True)
         return False
 
 async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
-    """Fully synchronize the Algolia index using replace_all_objects."""
-    if not is_algolia_ready():
-        logger.error("Algolia not ready, cannot perform sync.")
-        return False, 0
-
+    """Syncs DB data to Algolia using replace_all_objects if available."""
+    if not is_algolia_ready(): logger.error("Algolia not ready for sync."); return False, 0
     valid_movies = []
-    for movie in all_movies_data:
-        if 'objectID' not in movie or not movie['objectID']:
-             if 'imdb_id' in movie and movie['imdb_id']:
-                 movie['objectID'] = movie['imdb_id']
-             else:
-                 logger.warning(f"Skipping movie in sync: Missing objectID/imdb_id. Data: {movie}")
-                 continue
-        valid_movies.append(movie)
-
-    total_to_upload = len(valid_movies)
-
-    if not valid_movies:
-        logger.info("Sync: DB data is empty or invalid, clearing Algolia index...")
-        cleared = await algolia_clear_index()
-        return cleared, 0
-
+    for m in all_movies_data:
+        if 'objectID' not in m or not m['objectID']:
+            if 'imdb_id' in m and m['imdb_id']: m['objectID'] = m['imdb_id']
+            else: logger.warning(f"Skipping sync item (no ID): {m}"); continue
+        valid_movies.append(m)
+    count = len(valid_movies)
+    if not valid_movies: logger.info("Sync: No valid data from DB, clearing index."); return await algolia_clear_index(), 0
     try:
-        logger.info(f"Sync: Starting full replacement of Algolia index with {total_to_upload:,} objects...")
-        await index.replace_all_objects_async(valid_movies, {"batchSize": 1000})
-        logger.info(f"Sync: Full sync to Algolia complete ({total_to_upload:,} objects).")
-        return True, total_to_upload
-
+        logger.info(f"Sync: Replacing Algolia index with {count:,} objects...")
+        if hasattr(index, 'replace_all_objects_async'):
+            await index.replace_all_objects_async(valid_movies, {"batchSize": 1000})
+            logger.info("Sync completed (async replace).")
+        elif hasattr(index, 'replace_all_objects'): # Sync fallback
+             logger.warning("Using synchronous replace_all_objects fallback.")
+             index.replace_all_objects(valid_movies, {"batchSize": 1000})
+             logger.info("Sync completed (sync replace).")
+        else: raise RuntimeError("No replace_all_objects method found")
+        return True, count
     except Exception as e:
-        logger.error(f"Failed during Algolia sync (replace_all_objects): {e}", exc_info=True)
+        logger.error(f"Algolia replace_all_objects failed: {e}", exc_info=True)
         return False, 0
