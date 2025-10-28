@@ -73,7 +73,7 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         return []
 
 async def algolia_add_movie(movie_data: dict):
-    """Ek movie ko Algolia mein add/update karein."""
+    """Ek movie ko Algolia mein add/update karein (Yeh 'upsert' hai)."""
     if not is_algolia_ready():
         logger.warning("Algolia not ready, skipping add_movie")
         return False
@@ -81,7 +81,7 @@ async def algolia_add_movie(movie_data: dict):
     try:
         if 'objectID' not in movie_data:
             movie_data['objectID'] = movie_data['imdb_id']
-        # Asynchronous save call
+        # Asynchronous save call (yeh add bhi karta hai aur update bhi)
         await index.save_object_async(movie_data)
         logger.info(f"Successfully added/updated object in Algolia: {movie_data['objectID']}")
         return True
@@ -90,7 +90,7 @@ async def algolia_add_movie(movie_data: dict):
         return False
 
 async def algolia_add_batch_movies(movies_list: List[dict]):
-    """Bahut saari movies ko ek saath Algolia mein add karein."""
+    """Bahut saari movies ko ek saath Algolia mein add/update karein."""
     if not is_algolia_ready():
         logger.warning("Algolia not ready, skipping add_batch_movies")
         return False
@@ -102,9 +102,9 @@ async def algolia_add_batch_movies(movies_list: List[dict]):
         for movie in movies_list:
             if 'objectID' not in movie:
                 movie['objectID'] = movie.get('imdb_id')
-        # Asynchronous save batch call
+        # Asynchronous save batch call (yeh add/update dono karega)
         await index.save_objects_async(movies_list)
-        logger.info(f"Successfully added {len(movies_list)} objects to Algolia in batch.")
+        logger.info(f"Successfully added/updated {len(movies_list)} objects to Algolia in batch.")
         return True
     except Exception as e:
         logger.error(f"Failed to add batch objects to Algolia: {e}", exc_info=True)
@@ -140,39 +140,32 @@ async def algolia_clear_index():
         logger.error(f"Failed to clear Algolia index: {e}", exc_info=True)
         return False
 
+# FIX 4: /sync_algolia ke liye behtar logic
 async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     """
     Sabse important function (/sync_algolia ke liye).
-    Yeh DB se liye gaye poore data ko Algolia par upload karega.
+    Yeh DB se liye gaye poore data ko Algolia par overwrite karega.
     """
     if not is_algolia_ready():
         logger.error("Algolia not ready, cannot perform sync.")
         return False, 0
     
-    if not all_movies_data:
-        await algolia_clear_index()
-        return True, 0
-    
     try:
-        total_uploaded = 0
-        batch_size = 1000
-        logger.info(f"Sync: Starting upload of {len(all_movies_data)} objects in batches of {batch_size}...")
+        if not all_movies_data:
+            await algolia_clear_index()
+            logger.info("Sync: DB is empty, cleared Algolia index.")
+            return True, 0
         
-        # Algolia mein objects ko save karne ke liye batch mein save_objects_async ka istemaal karna behtar hai.
-        # Pehle batch mein clear_existing_index=True hona chahiye.
-        for i in range(0, len(all_movies_data), batch_size):
-            batch = all_movies_data[i:i + batch_size]
-            
-            # clear_existing_index sirf pehle batch के लिए
-            clear_index = (i == 0)
-            
-            await index.save_objects_async(batch, {"clearExistingIndex": clear_index})
-            
-            total_uploaded += len(batch)
-            logger.info(f"Sync: Uploaded {total_uploaded}/{len(all_movies_data)} objects...")
+        # Algolia v4 ka sabse behtar tareeka: replace_all_objects_async
+        # Yeh automatically index ko clear karta hai aur naya data batch mein upload karta hai.
+        logger.info(f"Sync: Starting full replacement of Algolia index with {len(all_movies_data)} objects...")
         
-        logger.info("Sync: Full sync to Algolia complete.")
+        await index.replace_all_objects_async(all_movies_data, {"batchSize": 1000})
+        
+        total_uploaded = len(all_movies_data)
+        logger.info(f"Sync: Full sync to Algolia complete ({total_uploaded} objects).")
         return True, total_uploaded
+        
     except Exception as e:
         logger.error(f"Failed during Algolia sync (algolia_sync_data): {e}", exc_info=True)
         return False, 0
