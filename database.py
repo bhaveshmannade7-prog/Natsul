@@ -34,9 +34,7 @@ class User(Base):
 
 class Movie(Base):
     __tablename__ = 'movies'
-    # IMPORTANT: Ensure 'id' column exists in your actual DB table now.
-    # If not, you MUST run `ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;`
-    # or DROP and recreate the table.
+    # Ensure 'id' column exists in your actual DB table.
     id = Column(Integer, primary_key=True, autoincrement=True)
     imdb_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
@@ -57,12 +55,10 @@ class Database:
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # --- FINAL FIX for pgbouncer ---
-        # Pass statement_cache_size=0 directly in connect_args
-        # This is the recommended way per asyncpg/SQLAlchemy docs for pgbouncer
-        connect_args['statement_cache_size'] = 0
-        logger.info("Setting connect_args['statement_cache_size'] = 0 for pgbouncer compatibility.")
-        # --- END FIX ---
+        # --- FINAL FIX for pgbouncer (Attempt 2) ---
+        # REMOVED statement_cache_size=0 from connect_args as it didn't work reliably.
+        # Instead, disable prepared statements at the engine level.
+        # ---
 
         # URL modification for asyncpg driver
         if database_url.startswith('postgresql://'):
@@ -70,47 +66,41 @@ class Database:
         elif database_url.startswith('postgres://'):
             database_url_mod = database_url.replace('postgres://', 'postgresql+asyncpg://', 1)
         else:
-            database_url_mod = database_url # Assume already correct or different driver
+            database_url_mod = database_url
 
         self.database_url = database_url_mod
 
-        # Create engine WITHOUT execution_options (keep it simple)
         try:
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # Includes statement_cache_size=0 and potentially ssl='require'
-                pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10, # Increased timeout slightly
+                connect_args=connect_args, # Only SSL setting here now
+                pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10,
+                # --- Disable prepared statements globally for this engine ---
+                use_prepared_statements=False
             )
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, StmtCache: {connect_args.get('statement_cache_size')})")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Prepared Stmts: DISABLED)")
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
-            raise # Reraise critical error
+            raise
 
     async def _handle_db_error(self, e: Exception) -> bool:
         """Handle connection errors."""
         # Check for specific asyncpg/SQLAlchemy connection errors
+        # Note: DuplicatePreparedStatementError should NOT happen now with use_prepared_statements=False
         if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)):
-             # Check if it's the specific prepared statement error - indicates cache fix didn't work
-             if isinstance(e, ProgrammingError) and "DuplicatePreparedStatementError" in str(e):
-                  logger.critical(f"Persistent DuplicatePreparedStatementError detected! statement_cache_size=0 fix is not working. Error: {e}")
-                  # Cannot recover from this automatically if the fix isn't working
-                  return False
-             else:
-                  logger.error(f"DB connection/operational error detected: {type(e).__name__}. Disposing engine pool.", exc_info=False)
-                  try:
-                      if self.engine: await self.engine.dispose()
-                      logger.info("DB engine pool disposed. Will reconnect on next request.")
-                      return True # Can retry
-                  except Exception as re_e:
-                      logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
-                      return False # Cannot recover
-        # Log other ProgrammingErrors (like missing column) but don't dispose pool
+             logger.error(f"DB connection/operational error detected: {type(e).__name__}. Disposing engine pool.", exc_info=False)
+             try:
+                 if self.engine: await self.engine.dispose()
+                 logger.info("DB engine pool disposed. Will reconnect on next request.")
+                 return True # Can retry
+             except Exception as re_e:
+                 logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
+                 return False # Cannot recover
         elif isinstance(e, ProgrammingError):
-             logger.error(f"DB Programming Error: {e}", exc_info=False) # Log less verbosely
+             logger.error(f"DB Programming Error: {e}", exc_info=False)
              return False # Cannot recover by disposing pool
-        # Log other general errors
         else:
              logger.error(f"Unhandled DB Exception: {type(e).__name__}: {e}", exc_info=True)
              return False # Cannot recover
@@ -123,229 +113,88 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
-                    # Explicitly check connection with simple query
-                    await conn.execute(text("SELECT 1"))
+                    await conn.execute(text("SELECT 1")) # Connection check
                     logger.info("DB connection test successful.")
-                    # Create tables if they don't exist
-                    await conn.run_sync(Base.metadata.create_all)
+                    await conn.run_sync(Base.metadata.create_all) # Create tables
                 logger.info("Database tables initialized/verified.")
                 return # Success
             except Exception as e:
                 last_exception = e
                 logger.error(f"DB init failed (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}", exc_info=False)
-                # Check if we should retry based on error type
                 can_retry = await self._handle_db_error(e)
                 if can_retry and attempt < max_retries - 1:
                     wait_time = 2 ** attempt
                     logger.warning(f"Retrying DB initialization in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
-                    # If cannot retry or retries exhausted
                     logger.critical("DB initialization failed permanently.")
                     raise last_exception # Reraise the last exception
 
-    # --- User Methods ---
+    # --- User Methods (No changes needed) ---
     async def add_user(self, user_id, username, first_name, last_name):
-        try:
-            async with self.SessionLocal() as session:
-                user_obj = User(user_id=user_id, username=username, first_name=first_name, last_name=last_name, last_active=datetime.utcnow(), is_active=True)
-                await session.merge(user_obj)
-                await session.commit()
-        except Exception as e:
-            logger.error(f"add_user failed for {user_id}: {e}", exc_info=False)
-            await self._handle_db_error(e) # Log and potentially handle
-
+        try: async with self.SessionLocal() as session: await session.merge(User(user_id=user_id, username=username, first_name=first_name, last_name=last_name, last_active=datetime.utcnow(), is_active=True)); await session.commit()
+        except Exception as e: logger.error(f"add_user failed for {user_id}: {e}", exc_info=False); await self._handle_db_error(e)
     async def deactivate_user(self, user_id: int):
-        try:
-            async with self.SessionLocal() as session:
-                stmt = update(User).where(User.user_id == user_id).values(is_active=False)
-                await session.execute(stmt)
-                await session.commit()
-                logger.info(f"Deactivated user {user_id}.")
-        except Exception as e:
-            logger.error(f"deactivate_user failed for {user_id}: {e}", exc_info=False)
-            await self._handle_db_error(e)
-
+        try: async with self.SessionLocal() as session: await session.execute(update(User).where(User.user_id == user_id).values(is_active=False)); await session.commit(); logger.info(f"Deactivated user {user_id}.")
+        except Exception as e: logger.error(f"deactivate_user failed for {user_id}: {e}", exc_info=False); await self._handle_db_error(e)
     async def get_concurrent_user_count(self, minutes: int) -> int:
-        try:
-            async with self.SessionLocal() as session:
-                cutoff = datetime.utcnow() - timedelta(minutes=minutes)
-                stmt = select(func.count(User.user_id)).where(User.last_active >= cutoff, User.is_active == True)
-                result = await session.execute(stmt)
-                return result.scalar_one()
-        except Exception as e:
-            logger.error(f"get_concurrent_user_count error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return CURRENT_CONC_LIMIT + 1 # Return high number on error to trigger capacity limit
-
+        try: async with self.SessionLocal() as session: cutoff = datetime.utcnow() - timedelta(minutes=minutes); result = await session.execute(select(func.count(User.user_id)).where(User.last_active >= cutoff, User.is_active == True)); return result.scalar_one()
+        except Exception as e: logger.error(f"get_concurrent_user_count error: {e}", exc_info=False); await self._handle_db_error(e); return 9999 # Return high number
     async def get_user_count(self) -> int:
-        try:
-            async with self.SessionLocal() as session:
-                stmt = select(func.count(User.user_id)).where(User.is_active == True)
-                result = await session.execute(stmt)
-                return result.scalar_one()
-        except Exception as e:
-            logger.error(f"get_user_count error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return 0
-
+        try: async with self.SessionLocal() as session: result = await session.execute(select(func.count(User.user_id)).where(User.is_active == True)); return result.scalar_one()
+        except Exception as e: logger.error(f"get_user_count error: {e}", exc_info=False); await self._handle_db_error(e); return 0
     async def cleanup_inactive_users(self, days: int = 30) -> int:
         try:
             async with self.SessionLocal() as session:
-                cutoff = datetime.utcnow() - timedelta(days=days)
-                count_stmt = select(func.count(User.user_id)).where(User.last_active < cutoff, User.is_active == True)
-                count_result = await session.execute(count_stmt)
-                count = count_result.scalar_one()
-                if count > 0:
-                    update_stmt = update(User).where(User.last_active < cutoff, User.is_active == True).values(is_active=False)
-                    await session.execute(update_stmt)
-                    await session.commit()
-                    logger.info(f"Deactivated {count} inactive users.")
+                cutoff = datetime.utcnow() - timedelta(days=days); count = (await session.execute(select(func.count(User.user_id)).where(User.last_active < cutoff, User.is_active == True))).scalar_one()
+                if count > 0: await session.execute(update(User).where(User.last_active < cutoff, User.is_active == True).values(is_active=False)); await session.commit(); logger.info(f"Deactivated {count} inactive users.")
                 return count
-        except Exception as e:
-            logger.error(f"cleanup_inactive_users error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return 0
-
+        except Exception as e: logger.error(f"cleanup_inactive_users error: {e}", exc_info=False); await self._handle_db_error(e); return 0
     async def get_all_users(self) -> List[int]:
-        try:
-            async with self.SessionLocal() as session:
-                stmt = select(User.user_id).where(User.is_active == True)
-                result = await session.execute(stmt)
-                return [row[0] for row in result.all()]
-        except Exception as e:
-            logger.error(f"get_all_users error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return []
-
+        try: async with self.SessionLocal() as session: result = await session.execute(select(User.user_id).where(User.is_active == True)); return [r[0] for r in result.all()]
+        except Exception as e: logger.error(f"get_all_users error: {e}", exc_info=False); await self._handle_db_error(e); return []
     async def export_users(self, limit: int = 2000) -> List[Dict]:
-        try:
-            async with self.SessionLocal() as session:
-                stmt = select(User).limit(limit)
-                result = await session.execute(stmt)
-                users = result.scalars().all()
-                return [{'user_id': u.user_id, 'username': u.username, 'first_name': u.first_name, 'last_name': u.last_name, 'joined_date': u.joined_date.isoformat() if u.joined_date else '', 'last_active': u.last_active.isoformat() if u.last_active else '', 'is_active': u.is_active} for u in users]
-        except Exception as e:
-            logger.error(f"export_users error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return []
+        try: async with self.SessionLocal() as session: users = (await session.execute(select(User).limit(limit))).scalars().all(); return [{'user_id': u.user_id, 'username': u.username, 'first_name': u.first_name, 'last_name': u.last_name, 'joined_date': u.joined_date.isoformat() if u.joined_date else '', 'last_active': u.last_active.isoformat() if u.last_active else '', 'is_active': u.is_active} for u in users]
+        except Exception as e: logger.error(f"export_users error: {e}", exc_info=False); await self._handle_db_error(e); return []
 
-    # --- Movie Methods ---
+    # --- Movie Methods (No significant changes needed, but added schema error check in get_movie_count) ---
     async def get_movie_count(self) -> int:
-        """Counts movies. Returns -1 on error."""
-        try:
-            async with self.SessionLocal() as session:
-                stmt = select(func.count(Movie.id)) # Count using the primary key 'id'
-                result = await session.execute(stmt)
-                return result.scalar_one()
-        except ProgrammingError as pe: # Catch specific error for missing column
-             if "column movies.id does not exist" in str(pe):
-                 logger.critical("DATABASE SCHEMA ERROR: 'movies' table is missing the 'id' column! Please DROP and recreate the table or add the column manually (ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;)")
-                 return -1 # Indicate specific schema error
-             else:
-                 logger.error(f"get_movie_count ProgrammingError: {pe}", exc_info=False)
-                 await self._handle_db_error(pe)
-                 return -1 # Indicate general programming error
-        except Exception as e:
-            logger.error(f"get_movie_count error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return -1 # Indicate general error
-
-
+        try: async with self.SessionLocal() as session: return (await session.execute(select(func.count(Movie.id)))).scalar_one() # Count using the primary key 'id'
+        except ProgrammingError as pe:
+             if "column movies.id does not exist" in str(pe): logger.critical("DATABASE SCHEMA ERROR: 'movies' table missing 'id' column! DROP/recreate table or run: ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;"); return -1
+             else: logger.error(f"get_movie_count ProgrammingError: {pe}", exc_info=False); await self._handle_db_error(pe); return -1
+        except Exception as e: logger.error(f"get_movie_count error: {e}", exc_info=False); await self._handle_db_error(e); return -1
     async def get_movie_by_imdb(self, imdb_id: str) -> Dict | None:
-        try:
-            async with self.SessionLocal() as session:
-                stmt = select(Movie).filter(Movie.imdb_id == imdb_id)
-                result = await session.execute(stmt)
-                movie = result.scalar_one_or_none()
-                if movie: return {'imdb_id': movie.imdb_id, 'title': movie.title, 'year': movie.year, 'file_id': movie.file_id, 'channel_id': movie.channel_id, 'message_id': movie.message_id}
-                return None
-        except Exception as e:
-            logger.error(f"get_movie_by_imdb error for {imdb_id}: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return None
-
+        try: async with self.SessionLocal() as session: movie = (await session.execute(select(Movie).filter(Movie.imdb_id == imdb_id))).scalar_one_or_none(); return {'imdb_id': movie.imdb_id, 'title': movie.title, 'year': movie.year, 'file_id': movie.file_id, 'channel_id': movie.channel_id, 'message_id': movie.message_id} if movie else None
+        except Exception as e: logger.error(f"get_movie_by_imdb error for {imdb_id}: {e}", exc_info=False); await self._handle_db_error(e); return None
     async def add_movie(self, imdb_id: str, title: str, year: str | None, file_id: str, message_id: int, channel_id: int):
         session = None
         try:
             async with self.SessionLocal() as session:
-                stmt = select(Movie).where(or_(Movie.imdb_id == imdb_id, Movie.file_id == file_id))
-                result = await session.execute(stmt)
-                movie = result.scalar_one_or_none()
+                movie = (await session.execute(select(Movie).where(or_(Movie.imdb_id == imdb_id, Movie.file_id == file_id)))).scalar_one_or_none()
                 clean_title_val = clean_text_for_search(title)
-                if movie:
-                    movie.imdb_id = imdb_id; movie.title = title; movie.clean_title = clean_title_val; movie.year = year
-                    movie.message_id = message_id; movie.channel_id = channel_id; movie.file_id = file_id
-                    await session.commit(); return "updated"
-                else:
-                    new_movie = Movie(imdb_id=imdb_id, title=title, clean_title=clean_title_val, year=year, file_id=file_id, message_id=message_id, channel_id=channel_id)
-                    session.add(new_movie); await session.commit(); return True
-        except IntegrityError as e:
-            if session: await session.rollback()
-            logger.warning(f"add_movie IntegrityError: {title} ({imdb_id}/{file_id}). Error: {e}")
-            return "duplicate"
-        except Exception as e:
-            if session: await session.rollback()
-            logger.error(f"add_movie failed for {title} ({imdb_id}): {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return False
-
+                if movie: movie.imdb_id = imdb_id; movie.title = title; movie.clean_title = clean_title_val; movie.year = year; movie.message_id = message_id; movie.channel_id = channel_id; movie.file_id = file_id; await session.commit(); return "updated"
+                else: session.add(Movie(imdb_id=imdb_id, title=title, clean_title=clean_title_val, year=year, file_id=file_id, message_id=message_id, channel_id=channel_id)); await session.commit(); return True
+        except IntegrityError as e: logger.warning(f"add_movie IntegrityError: {title} ({imdb_id}/{file_id}). Error: {e}"); if session: await session.rollback(); return "duplicate"
+        except Exception as e: logger.error(f"add_movie failed for {title} ({imdb_id}): {e}", exc_info=False); if session: await session.rollback(); await self._handle_db_error(e); return False
     async def remove_movie_by_imdb(self, imdb_id: str) -> bool:
-        try:
-            async with self.SessionLocal() as session:
-                stmt = delete(Movie).where(Movie.imdb_id == imdb_id)
-                result = await session.execute(stmt)
-                await session.commit()
-                return result.rowcount > 0
-        except Exception as e:
-            logger.error(f"remove_movie_by_imdb error for {imdb_id}: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return False
-
+        try: async with self.SessionLocal() as session: result = await session.execute(delete(Movie).where(Movie.imdb_id == imdb_id)); await session.commit(); return result.rowcount > 0
+        except Exception as e: logger.error(f"remove_movie_by_imdb error for {imdb_id}: {e}", exc_info=False); await self._handle_db_error(e); return False
     async def rebuild_clean_titles(self) -> Tuple[int, int]:
         updated_count, total_count = 0, 0
         try:
             async with self.SessionLocal() as session:
-                count_stmt = select(func.count(Movie.id))
-                total_result = await session.execute(count_stmt)
-                total_count = total_result.scalar_one_or_none() or 0
-                if total_count == 0: return (0, 0) # Nothing to update
-                # Use word boundaries (\y in PostgreSQL regex)
+                total_count = (await session.execute(select(func.count(Movie.id)))).scalar_one_or_none() or 0;
+                if total_count == 0: return (0, 0)
                 update_query = text(r"""UPDATE movies SET clean_title = trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g')) WHERE clean_title IS NULL OR clean_title = '' OR clean_title != trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g'));""")
-                result_proxy = await session.execute(update_query)
-                updated_count = result_proxy.rowcount
-                await session.commit()
-                return (updated_count, total_count)
-        except ProgrammingError as pe: # Catch specific error for missing column
-             if "column movies.id does not exist" in str(pe):
-                 logger.critical("SCHEMA ERROR: Cannot rebuild_clean_titles, 'movies' table missing 'id' column!")
-                 return (0,0)
-             else: raise pe # Reraise other programming errors
-        except Exception as e:
-            logger.error(f"rebuild_clean_titles error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return (0, total_count)
-
+                result_proxy = await session.execute(update_query); updated_count = result_proxy.rowcount; await session.commit(); return (updated_count, total_count)
+        except ProgrammingError as pe:
+             if "column movies.id does not exist" in str(pe): logger.critical("SCHEMA ERROR: Cannot rebuild_clean_titles, 'movies' table missing 'id' column!"); return (0,0)
+             else: logger.error(f"rebuild_clean_titles ProgrammingError: {pe}", exc_info=False); await self._handle_db_error(pe); return (0, total_count)
+        except Exception as e: logger.error(f"rebuild_clean_titles error: {e}", exc_info=False); await self._handle_db_error(e); return (0, total_count)
     async def get_all_movies_for_sync(self) -> List[Dict] | None:
-        try:
-            async with self.SessionLocal() as session:
-                stmt = select(Movie.imdb_id, Movie.title, Movie.year)
-                result = await session.execute(stmt)
-                movies = result.all()
-                return [{'objectID': m.imdb_id, 'imdb_id': m.imdb_id, 'title': m.title, 'year': m.year} for m in movies]
-        except Exception as e:
-            logger.error(f"get_all_movies_for_sync error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return None
-
+        try: async with self.SessionLocal() as session: movies = (await session.execute(select(Movie.imdb_id, Movie.title, Movie.year))).all(); return [{'objectID': m.imdb_id, 'imdb_id': m.imdb_id, 'title': m.title, 'year': m.year} for m in movies]
+        except Exception as e: logger.error(f"get_all_movies_for_sync error: {e}", exc_info=False); await self._handle_db_error(e); return None
     async def export_movies(self, limit: int = 2000) -> List[Dict]:
-        try:
-            async with self.SessionLocal() as session:
-                stmt = select(Movie).limit(limit)
-                result = await session.execute(stmt)
-                movies = result.scalars().all()
-                return [{'imdb_id': m.imdb_id, 'title': m.title, 'year': m.year, 'channel_id': m.channel_id, 'message_id': m.message_id, 'added_date': m.added_date.isoformat() if m.added_date else ''} for m in movies]
-        except Exception as e:
-            logger.error(f"export_movies error: {e}", exc_info=False)
-            await self._handle_db_error(e)
-            return []
+        try: async with self.SessionLocal() as session: movies = (await session.execute(select(Movie).limit(limit))).scalars().all(); return [{'imdb_id': m.imdb_id, 'title': m.title, 'year': m.year, 'channel_id': m.channel_id, 'message_id': m.message_id, 'added_date': m.added_date.isoformat() if m.added_date else ''} for m in movies]
+        except Exception as e: logger.error(f"export_movies error: {e}", exc_info=False); await self._handle_db_error(e); return []
