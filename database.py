@@ -49,17 +49,21 @@ class Movie(Base):
 class Database:
     def __init__(self, database_url: str):
         connect_args = {}
+        # SSL Requirement Check (No change needed here)
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # --- YEH pichli baar fail ho gaya tha ---
-        # connect_args['statement_cache_size'] = 0
+        # --- FINAL FIX for Pgbouncer Compatibility ---
+        # Error log hint points to this method.
+        # This tells the underlying asyncpg driver not to use prepared statements.
+        connect_args['statement_cache_size'] = 0
+        logger.info("Setting statement_cache_size=0 in connect_args for pgbouncer compatibility.")
         # ---
 
-        # URL modification for asyncpg driver
+        # URL modification for asyncpg driver (No change needed here)
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -70,26 +74,24 @@ class Database:
         self.database_url = database_url_mod
 
         try:
+            # Create the async engine, passing connect_args to the driver
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # Sirf SSL connect_args mein hai
-                pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10,
-                # --- PERMANENT FIX ---
-                # Yeh argument seedha SQLAlchemy dialect ko batata hai
-                # ki prepared statements (jo pgbouncer ko pasand nahi) disable kare.
-                disable_prepared_statements=True
+                connect_args=connect_args, # <- Correct place for driver-specific args
+                pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10
+                # Removed invalid 'disable_prepared_statements=True' argument
             )
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Prepared Stmts: DISABLED)")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0)")
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
-            raise
+            raise # Reraise the exception to stop the application startup
 
     async def _handle_db_error(self, e: Exception) -> bool:
         """Handle connection errors."""
         # Check for specific asyncpg/SQLAlchemy connection errors
-        # Note: DuplicatePreparedStatementError should NOT happen now with disable_prepared_statements=True
+        # Note: DuplicatePreparedStatementError should NOT happen now with statement_cache_size=0
         if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)):
              logger.error(f"DB connection/operational error detected: {type(e).__name__}. Disposing engine pool.", exc_info=False)
              try:
@@ -100,7 +102,7 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False # Cannot recover
         elif isinstance(e, ProgrammingError):
-             # Agar "DuplicatePreparedStatementError" ab bhi aata hai, toh log zyada detail mein hoga
+             # Log ProgrammingErrors fully, including potential DuplicatePreparedStatementError if fix fails
              logger.error(f"DB Programming Error: {e}", exc_info=True) # Full traceback
              return False # Cannot recover by disposing pool
         else:
@@ -115,7 +117,7 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
-                    # Connection check (SELECT 1 se badal kar version() kiya, jaisa error log mein tha)
+                    # Use the same query mentioned in the error log for connection check
                     await conn.execute(text("select pg_catalog.version()"))
                     logger.info("DB connection test successful.")
                     # Create tables
@@ -125,7 +127,7 @@ class Database:
             except Exception as e:
                 last_exception = e
                 logger.error(f"DB init failed (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}", exc_info=False)
-                # Error ko handle karne ki koshish (e.g., pool dispose)
+                # Attempt to handle the error (e.g., dispose pool)
                 can_retry = await self._handle_db_error(e)
                 if can_retry and attempt < max_retries - 1:
                     wait_time = 2 ** attempt
@@ -133,9 +135,9 @@ class Database:
                     await asyncio.sleep(wait_time)
                 else:
                     logger.critical("DB initialization failed permanently.")
-                    raise last_exception # Reraise the last exception
+                    raise last_exception # Reraise the last exception after retries
 
-    # --- User Methods (Indentation pehle se fixed hai) ---
+    # --- User Methods ---
     async def add_user(self, user_id, username, first_name, last_name):
         try:
             async with self.SessionLocal() as session:
@@ -211,7 +213,7 @@ class Database:
             await self._handle_db_error(e)
             return []
 
-    # --- Movie Methods (Indentation pehle se fixed hai) ---
+    # --- Movie Methods ---
     async def get_movie_count(self) -> int:
         try:
             async with self.SessionLocal() as session:
@@ -286,6 +288,7 @@ class Database:
             async with self.SessionLocal() as session:
                 total_count = (await session.execute(select(func.count(Movie.id)))).scalar_one_or_none() or 0
                 if total_count == 0: return (0, 0)
+                # Note: This query assumes PostgreSQL regex syntax
                 update_query = text(r"""UPDATE movies SET clean_title = trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g')) WHERE clean_title IS NULL OR clean_title = '' OR clean_title != trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g'));""")
                 result_proxy = await session.execute(update_query)
                 updated_count = result_proxy.rowcount
