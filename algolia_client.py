@@ -19,27 +19,21 @@ if not ALGOLIA_APP_ID or not ALGOLIA_ADMIN_KEY or not ALGOLIA_INDEX_NAME:
     logger.critical("Algolia APP_ID, ADMIN_KEY, ya INDEX_NAME environment variables missing!")
 else:
     try:
-        # ✅ FIX 2: Client ko .create() method se initialize karein
-        client = SearchClient.create(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+        # ✅ FIX 1: .create() ko hata diya gaya. Yeh v4 ke liye sahi syntax hai.
+        client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         index = client.init_index(ALGOLIA_INDEX_NAME)
         
         # Index settings (Fuzzy Search aur Performance ke liye)
         index.set_settings({
-            # Typo Tolerance (Kantra -> Kantara) ke liye
-            'minWordSizefor1Typo': 3, # 3 अक्षरों के शब्द पर 1 typo की अनुमति
-            'minWordSizefor2Typos': 7, # 7 अक्षरों के शब्द पर 2 typos की अनुमति
+            'minWordSizefor1Typo': 3,
+            'minWordSizefor2Typos': 7,
             'hitsPerPage': 20,
-            
-            # Title को main search attribute बनाएं (ताकि "ktr" bhi काम करे)
             'searchableAttributes': [
                 'title',
                 'imdb_id',
                 'year'
             ],
-            
-            # Words के बीच partial matching को अनुमति दें (जैसे 'batman' के लिए 'bat' search)
             'queryType': 'prefixLast', 
-            
             'attributesForFaceting': ['year'],
         })
         logger.info(f"Algolia client initialized. Index: '{ALGOLIA_INDEX_NAME}'")
@@ -59,7 +53,6 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         return []
     
     try:
-        # Asynchronous search call
         results = await index.search_async(query, {'hitsPerPage': limit})
         formatted_hits = []
         for hit in results.get('hits', []):
@@ -81,7 +74,6 @@ async def algolia_add_movie(movie_data: dict):
     try:
         if 'objectID' not in movie_data:
             movie_data['objectID'] = movie_data['imdb_id']
-        # Asynchronous save call (yeh add bhi karta hai aur update bhi)
         await index.save_object_async(movie_data)
         logger.info(f"Successfully added/updated object in Algolia: {movie_data['objectID']}")
         return True
@@ -102,7 +94,6 @@ async def algolia_add_batch_movies(movies_list: List[dict]):
         for movie in movies_list:
             if 'objectID' not in movie:
                 movie['objectID'] = movie.get('imdb_id')
-        # Asynchronous save batch call (yeh add/update dono karega)
         await index.save_objects_async(movies_list)
         logger.info(f"Successfully added/updated {len(movies_list)} objects to Algolia in batch.")
         return True
@@ -117,7 +108,6 @@ async def algolia_remove_movie(imdb_id: str):
         return False
     
     try:
-        # Asynchronous delete call
         await index.delete_object_async(imdb_id)
         logger.info(f"Successfully deleted object from Algolia: {imdb_id}")
         return True
@@ -132,7 +122,6 @@ async def algolia_clear_index():
         return False
     
     try:
-        # Asynchronous clear call
         await index.clear_objects_async()
         logger.info(f"Successfully cleared Algolia index: {ALGOLIA_INDEX_NAME}")
         return True
@@ -140,7 +129,6 @@ async def algolia_clear_index():
         logger.error(f"Failed to clear Algolia index: {e}", exc_info=True)
         return False
 
-# FIX 4: /sync_algolia ke liye behtar logic
 async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     """
     Sabse important function (/sync_algolia ke liye).
@@ -156,8 +144,6 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
             logger.info("Sync: DB is empty, cleared Algolia index.")
             return True, 0
         
-        # Algolia v4 ka sabse behtar tareeka: replace_all_objects_async
-        # Yeh automatically index ko clear karta hai aur naya data batch mein upload karta hai.
         logger.info(f"Sync: Starting full replacement of Algolia index with {len(all_movies_data)} objects...")
         
         await index.replace_all_objects_async(all_movies_data, {"batchSize": 1000})
