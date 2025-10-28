@@ -221,14 +221,22 @@ def handler_timeout(timeout: int = HANDLER_TIMEOUT):
     return decorator
 
 # ============ SAFE WRAPPERS ============
+# --- FIX START ---
+# Yahaan SyntaxError tha. 'try:' ke baad 'async with' agle line par indent hona chahiye.
+# Saath hi, 'except' blocks ko bhi saaf kar diya hai.
 async def safe_db_call(coro, timeout=DB_OP_TIMEOUT, default=None):
-    try: async with DB_SEMAPHORE: return await asyncio.wait_for(coro, timeout=timeout)
-    except asyncio.TimeoutError: logger.error(f"DB timeout: {coro.__name__}"); return default
+    try:
+        async with DB_SEMAPHORE:
+            return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.error(f"DB timeout: {getattr(coro, '__name__', 'unknown_coro')}")
+        return default
     except Exception as e:
          # Log full traceback for DB errors
          logger.error(f"DB error in {getattr(coro, '__name__', 'unknown_coro')}: {e}", exc_info=True)
-         await db._handle_db_error(e); # Attempt to handle connection issues
+         await db._handle_db_error(e) # Attempt to handle connection issues
          return default
+# --- FIX END ---
 
 async def safe_tg_call(coro, timeout=TG_OP_TIMEOUT):
     try: return await asyncio.wait_for(coro, timeout=timeout)
