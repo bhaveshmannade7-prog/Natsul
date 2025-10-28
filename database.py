@@ -55,9 +55,12 @@ class Database:
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # --- FINAL FIX for pgbouncer (Attempt 2) ---
-        # REMOVED statement_cache_size=0 from connect_args as it didn't work reliably.
-        # Instead, disable prepared statements at the engine level.
+        # --- FINAL FIX for pgbouncer (Attempt 3) ---
+        # Disabling prepared statements via 'statement_cache_size=0'
+        # This argument is passed to the asyncpg driver via connect_args.
+        # This is the correct way to handle pgbouncer compatibility.
+        connect_args['statement_cache_size'] = 0
+        logger.info("Setting statement_cache_size=0 for pgbouncer compatibility.")
         # ---
 
         # URL modification for asyncpg driver
@@ -74,13 +77,12 @@ class Database:
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # Only SSL setting here now
+                connect_args=connect_args, # <-- Ab ismein SSL aur statement_cache_size dono hain
                 pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10,
-                # --- Disable prepared statements globally for this engine ---
-                use_prepared_statements=False
+                # Invalid argument 'use_prepared_statements=False' HATA DIYA GAYA HAI
             )
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Prepared Stmts: DISABLED)")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0)")
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise
@@ -130,7 +132,7 @@ class Database:
                     logger.critical("DB initialization failed permanently.")
                     raise last_exception # Reraise the last exception
 
-    # --- User Methods (FIXED INDENTATION) ---
+    # --- User Methods (Indentation fixed in last round) ---
     async def add_user(self, user_id, username, first_name, last_name):
         try:
             async with self.SessionLocal() as session:
@@ -206,7 +208,7 @@ class Database:
             await self._handle_db_error(e)
             return []
 
-    # --- Movie Methods (FIXED INDENTATION) ---
+    # --- Movie Methods (Indentation fixed in last round) ---
     async def get_movie_count(self) -> int:
         try:
             async with self.SessionLocal() as session:
