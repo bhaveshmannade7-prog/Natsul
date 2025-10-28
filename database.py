@@ -55,12 +55,8 @@ class Database:
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # --- FINAL FIX for pgbouncer (Attempt 3) ---
-        # Disabling prepared statements via 'statement_cache_size=0'
-        # This argument is passed to the asyncpg driver via connect_args.
-        # This is the correct way to handle pgbouncer compatibility.
-        connect_args['statement_cache_size'] = 0
-        logger.info("Setting statement_cache_size=0 for pgbouncer compatibility.")
+        # --- YEH pichli baar fail ho gaya tha ---
+        # connect_args['statement_cache_size'] = 0
         # ---
 
         # URL modification for asyncpg driver
@@ -77,12 +73,15 @@ class Database:
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # <-- Ab ismein SSL aur statement_cache_size dono hain
+                connect_args=connect_args, # Sirf SSL connect_args mein hai
                 pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10,
-                # Invalid argument 'use_prepared_statements=False' HATA DIYA GAYA HAI
+                # --- PERMANENT FIX ---
+                # Yeh argument seedha SQLAlchemy dialect ko batata hai
+                # ki prepared statements (jo pgbouncer ko pasand nahi) disable kare.
+                disable_prepared_statements=True
             )
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0)")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Prepared Stmts: DISABLED)")
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise
@@ -90,7 +89,7 @@ class Database:
     async def _handle_db_error(self, e: Exception) -> bool:
         """Handle connection errors."""
         # Check for specific asyncpg/SQLAlchemy connection errors
-        # Note: DuplicatePreparedStatementError should NOT happen now with use_prepared_statements=False
+        # Note: DuplicatePreparedStatementError should NOT happen now with disable_prepared_statements=True
         if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)):
              logger.error(f"DB connection/operational error detected: {type(e).__name__}. Disposing engine pool.", exc_info=False)
              try:
@@ -101,7 +100,8 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False # Cannot recover
         elif isinstance(e, ProgrammingError):
-             logger.error(f"DB Programming Error: {e}", exc_info=False)
+             # Agar "DuplicatePreparedStatementError" ab bhi aata hai, toh log zyada detail mein hoga
+             logger.error(f"DB Programming Error: {e}", exc_info=True) # Full traceback
              return False # Cannot recover by disposing pool
         else:
              logger.error(f"Unhandled DB Exception: {type(e).__name__}: {e}", exc_info=True)
@@ -115,14 +115,17 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
-                    await conn.execute(text("SELECT 1")) # Connection check
+                    # Connection check (SELECT 1 se badal kar version() kiya, jaisa error log mein tha)
+                    await conn.execute(text("select pg_catalog.version()"))
                     logger.info("DB connection test successful.")
-                    await conn.run_sync(Base.metadata.create_all) # Create tables
+                    # Create tables
+                    await conn.run_sync(Base.metadata.create_all)
                 logger.info("Database tables initialized/verified.")
                 return # Success
             except Exception as e:
                 last_exception = e
                 logger.error(f"DB init failed (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}", exc_info=False)
+                # Error ko handle karne ki koshish (e.g., pool dispose)
                 can_retry = await self._handle_db_error(e)
                 if can_retry and attempt < max_retries - 1:
                     wait_time = 2 ** attempt
@@ -132,7 +135,7 @@ class Database:
                     logger.critical("DB initialization failed permanently.")
                     raise last_exception # Reraise the last exception
 
-    # --- User Methods (Indentation fixed in last round) ---
+    # --- User Methods (Indentation pehle se fixed hai) ---
     async def add_user(self, user_id, username, first_name, last_name):
         try:
             async with self.SessionLocal() as session:
@@ -208,7 +211,7 @@ class Database:
             await self._handle_db_error(e)
             return []
 
-    # --- Movie Methods (Indentation fixed in last round) ---
+    # --- Movie Methods (Indentation pehle se fixed hai) ---
     async def get_movie_count(self) -> int:
         try:
             async with self.SessionLocal() as session:
