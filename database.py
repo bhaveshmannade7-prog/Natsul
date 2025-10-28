@@ -62,6 +62,12 @@ class Database:
         else:
              logger.info("Internal database URL detected, using default SSL (none).")
         
+        # --- YAHI HAI MUKHYA FIX ---
+        # Render/pgbouncer ke saath compatibility ke liye prepared statement cache ko disable karein
+        connect_args['statement_cache_size'] = 0
+        logger.info("Setting statement_cache_size=0 for pgbouncer compatibility.")
+        # --- FIX END ---
+
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -74,12 +80,13 @@ class Database:
         self.engine = create_async_engine(
             self.database_url, 
             echo=False, 
-            connect_args=connect_args,
+            connect_args=connect_args, # Ab 'connect_args' mein fix shaamil hai
             pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=8,
         )
         
         self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-        logger.info(f"Database engine initialized (SSL: {connect_args.get('ssl', 'default')})")
+        # Behtar logging ke liye
+        logger.info(f"Database engine initialized (SSL: {connect_args.get('ssl', 'default')}, Cache: {connect_args.get('statement_cache_size')})")
         
     async def _handle_db_error(self, e: Exception) -> bool:
         """Connection errors ko handle karein."""
@@ -192,12 +199,6 @@ class Database:
             logger.error(f"get_movie_by_imdb error: {e}", exc_info=True)
             return None
 
-    # async def super_search_movies_advanced(self, query: str, limit: int = 20) -> List[Dict]:
-    #     # YEH FUNCTION AB ALGOLIA SE REPLACE HO GAYA HAI AUR USE NAHI HOGA
-    #     logger.info("Local DB search called (deprecated).")
-    #     return []
-
-    # FIX 2: add_movie ko update/insert (upsert) logic ke liye modify kiya gaya
     async def add_movie(self, imdb_id: str, title: str, year: str, file_id: str, message_id: int, channel_id: int):
         """Movie ko DB mein add ya update karein (Upsert logic)."""
         session = None
@@ -212,13 +213,13 @@ class Database:
                 
                 if movie:
                     # Movie mili - Update karein
-                    movie.imdb_id = imdb_id  # Ensure imdb_id is updated (agar file_id se match hua)
+                    movie.imdb_id = imdb_id
                     movie.title = title
                     movie.clean_title = clean
                     movie.year = year
                     movie.message_id = message_id
                     movie.channel_id = channel_id
-                    movie.file_id = file_id # Ensure file_id is updated (agar imdb_id se match hua)
+                    movie.file_id = file_id
                     await session.commit()
                     return "updated"
                 else:
@@ -232,14 +233,12 @@ class Database:
                     return True 
         except IntegrityError as e:
             if session: await session.rollback()
-            # Yeh tabhi hoga jab race condition ho (do ek saath add karein)
             logger.warning(f"Duplicate entry skipped (IntegrityError): {title} (IMDB: {imdb_id} or FileID: {file_id}).")
             return "duplicate" 
         except Exception as e:
             if session: await session.rollback()
-            if await self._handle_db_error(e): # Retry logic
+            if await self._handle_db_error(e): 
                 await asyncio.sleep(1)
-                # Sirf ek baar retry
                 return await self.add_movie(imdb_id, title, year, file_id, message_id, channel_id) 
             logger.error(f"add_movie error: {e}", exc_info=True)
             return False
