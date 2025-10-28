@@ -39,12 +39,11 @@ class User(Base):
 class Movie(Base):
     __tablename__ = 'movies'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    imdb_id = Column(String(50), unique=True, nullable=False, index=True) # Yeh Algolia ka 'objectID' banega
-    title = Column(String, nullable=False) # Yeh Algolia mein 'title' banega
-    clean_title = Column(String, nullable=False, index=True) # Yeh DB mein indexing ke liye
-    year = Column(String(10), nullable=True) # Yeh Algolia mein 'year' banega
+    imdb_id = Column(String(50), unique=True, nullable=False, index=True)
+    title = Column(String, nullable=False)
+    clean_title = Column(String, nullable=False, index=True)
+    year = Column(String(10), nullable=True) 
     
-    # Yeh details sirf DB mein rahengi, Algolia ko inki zaroorat nahi
     file_id = Column(String, nullable=False, index=True) 
     channel_id = Column(BigInteger, nullable=False)
     message_id = Column(BigInteger, nullable=False)
@@ -62,11 +61,8 @@ class Database:
         else:
              logger.info("Internal database URL detected, using default SSL (none).")
         
-        # --- YAHI HAI MUKHYA FIX ---
-        # Render/pgbouncer ke saath compatibility ke liye prepared statement cache ko disable karein
-        connect_args['statement_cache_size'] = 0
-        logger.info("Setting statement_cache_size=0 for pgbouncer compatibility.")
-        # --- FIX END ---
+        # Pichla fix (statement_cache_size in connect_args) kaam nahi kiya.
+        # Hum ise ab seedha URL mein add karenge.
 
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
@@ -75,18 +71,27 @@ class Database:
         else:
             database_url_mod = database_url 
 
+        # --- YAHI HAI MUKHYA FIX 2 (Database) ---
+        # Render/pgbouncer ke saath compatibility ke liye prepared statement cache ko disable karein
+        # Ise URL parameter ke roop mein add karein
+        if '?' in database_url_mod:
+            database_url_mod += "&statement_cache_size=0"
+        else:
+            database_url_mod += "?statement_cache_size=0"
+        logger.info("Appended 'statement_cache_size=0' to DB URL for pgbouncer compatibility.")
+        # --- FIX END ---
+
         self.database_url = database_url_mod
         
         self.engine = create_async_engine(
-            self.database_url, 
+            self.database_url, # Ab URL mein fix shaamil hai
             echo=False, 
-            connect_args=connect_args, # Ab 'connect_args' mein fix shaamil hai
+            connect_args=connect_args, # Yahaan ab sirf SSL bacha hai
             pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=8,
         )
         
         self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-        # Behtar logging ke liye
-        logger.info(f"Database engine initialized (SSL: {connect_args.get('ssl', 'default')}, Cache: {connect_args.get('statement_cache_size')})")
+        logger.info(f"Database engine initialized (SSL: {connect_args.get('ssl', 'default')})")
         
     async def _handle_db_error(self, e: Exception) -> bool:
         """Connection errors ko handle karein."""
@@ -204,7 +209,6 @@ class Database:
         session = None
         try:
             async with self.SessionLocal() as session:
-                # Pehle check karein ki movie file_id ya imdb_id se exist karti hai ya nahi
                 stmt = select(Movie).where(or_(Movie.imdb_id == imdb_id, Movie.file_id == file_id))
                 result = await session.execute(stmt)
                 movie = result.scalar_one_or_none()
@@ -212,7 +216,6 @@ class Database:
                 clean = clean_text_for_search(title)
                 
                 if movie:
-                    # Movie mili - Update karein
                     movie.imdb_id = imdb_id
                     movie.title = title
                     movie.clean_title = clean
@@ -223,7 +226,6 @@ class Database:
                     await session.commit()
                     return "updated"
                 else:
-                    # Movie nahi mili - Nayi add karein
                     movie = Movie(
                         imdb_id=imdb_id, title=title, clean_title=clean, year=year,
                         file_id=file_id, message_id=message_id, channel_id=channel_id
@@ -276,7 +278,6 @@ class Database:
                 result = await session.execute(select(func.count(Movie.id)))
                 total = result.scalar_one()
                 
-                # PostgreSQL-specific regex update
                 update_query = text(r"""
                     UPDATE movies 
                     SET clean_title = trim(
@@ -318,17 +319,15 @@ class Database:
     async def get_all_movies_for_sync(self) -> List[Dict]:
         """
         Algolia Sync ke liye sabhi movies fetch karein.
-        Sirf zaroori data (objectID, title, year) hi select karein.
         """
         try:
             async with self.SessionLocal() as session:
                 result = await session.execute(select(Movie.imdb_id, Movie.title, Movie.year))
                 movies = result.all()
                 
-                # Data ko Algolia ke format mein badlein
                 return [
                     {
-                        'objectID': m.imdb_id, # Sabse zaroori
+                        'objectID': m.imdb_id,
                         'imdb_id': m.imdb_id,
                         'title': m.title,
                         'year': m.year
@@ -337,10 +336,7 @@ class Database:
                 ]
         except Exception as e:
             logger.error(f"get_all_movies_for_sync error: {e}", exc_info=True)
-            return None # Error ke case mein None return karein
-
-
-    # --- Export Functions (DB se data export karein) ---
+            return None 
 
     async def export_users(self, limit: int = 2000) -> List[Dict]:
         """Users ko CSV export ke liye fetch karein."""
