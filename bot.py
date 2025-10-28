@@ -2,6 +2,12 @@
 import os
 import asyncio
 import logging
+import uvloop  # <-- FIX 3: UVLoop import karein
+uvloop.install()  # <-- FIX 3: UVLoop ko activate karein
+
+from dotenv import load_dotenv  # <-- FIX 1: load_dotenv ko sabse pehle call karein
+load_dotenv()
+
 import re
 import io
 import signal
@@ -20,14 +26,11 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest 
 from aiogram.client.default import DefaultBotProperties
 
-from dotenv import load_dotenv
-from fastapi import FastAPI, BackgroundTasks, Request, HTTPException
-
 # --- Database aur Algolia Imports ---
+# Ab environment variables load ho chuke hain
 from database import Database, clean_text_for_search, AUTO_MESSAGE_ID_PLACEHOLDER
 import algolia_client
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(name)-12s %(message)s")
 logger = logging.getLogger("bot")
 logging.getLogger("aiogram").setLevel(logging.WARNING)
@@ -65,9 +68,9 @@ if not BOT_TOKEN or not DATABASE_URL:
     logger.critical("Missing BOT_TOKEN or DATABASE_URL! Exiting.")
     raise SystemExit(1)
     
-# Algolia check yahan zaroori nahi, woh client mein hota hai.
-# if not algolia_client.is_algolia_ready():
-#     logger.critical("Algolia environment variables (APP_ID, ADMIN_KEY, INDEX_NAME) missing or incorrect!")
+# FIX 1: Ab algolia_client.is_algolia_ready() sahi se check karega
+if not algolia_client.is_algolia_ready():
+    logger.critical("Algolia environment variables (APP_ID, ADMIN_KEY, INDEX_NAME) missing or incorrect!")
 
 def build_webhook_url() -> str:
     base = RENDER_EXTERNAL_URL or PUBLIC_URL
@@ -373,6 +376,7 @@ async def start_command(message: types.Message):
         movie_count = await safe_db_call(db.get_movie_count(), default=0)
         concurrent_users = await safe_db_call(db.get_concurrent_user_count(ACTIVE_WINDOW_MINUTES), default=0)
         
+        # FIX 1: Yeh ab sahi status dikhayega
         algolia_status = "🟢 Connected" if algolia_client.is_algolia_ready() else "❌ NOT CONNECTED (Search Slow/Broken)"
         
         admin_message = f"""👑 <b>Admin Console: @{bot_info.username}</b>
@@ -484,6 +488,7 @@ async def search_movie_handler(message: types.Message):
         return
 
     # Check karein ki Algolia chal raha hai ya nahi. Agar nahi, toh fail fast.
+    # FIX 1: Yeh check ab sahi se kaam karega.
     if not algolia_client.is_algolia_ready():
         logger.warning(f"User {user_id} search failed: Algolia client not ready (Slow Search).")
         await safe_tg_call(message.answer("❌ Search Engine configure nahi hai ya abhi kaam nahi kar raha hai. Admin se sampark karein."))
@@ -582,6 +587,7 @@ async def stats_command(message: types.Message):
     movie_count = await safe_db_call(db.get_movie_count(), default=0)
     concurrent_users = await safe_db_call(db.get_concurrent_user_count(ACTIVE_WINDOW_MINUTES), default=0)
     
+    # FIX 1: Yeh ab sahi status dikhayega
     algolia_status = "🟢 Connected" if algolia_client.is_algolia_ready() else "❌ NOT CONNECTED"
     
     stats_msg = f"""📊 <b>Live System Statistics</b>
@@ -655,28 +661,37 @@ async def add_movie_command(message: types.Message):
         await safe_tg_call(message.answer("❌ Format galat hai; use: /add_movie imdb_id | title | year"))
         return
         
-    # 1. Pehle Database mein save karein
+    # 1. Pehle Database mein save/update karein
     success_db = await safe_db_call(db.add_movie(
         imdb_id=imdb_id, title=title, year=year,
         file_id=file_id, message_id=message.reply_to_message.message_id, channel_id=message.reply_to_message.chat.id
     ), default=False)
     
+    algolia_data = {'objectID': imdb_id, 'imdb_id': imdb_id, 'title': title, 'year': year}
+
     if success_db is True:
         await safe_tg_call(message.answer(f"✅ Movie '<b>{title}</b>' database mein add ho gayi."))
-        
         # 2. Ab Algolia mein bhi save karein
-        algolia_data = {'objectID': imdb_id, 'imdb_id': imdb_id, 'title': title, 'year': year}
         success_algolia = await algolia_client.algolia_add_movie(algolia_data)
-        
         if success_algolia:
             await safe_tg_call(message.answer("✅ Movie Algolia index mein bhi add ho gayi."))
         else:
             await safe_tg_call(message.answer("❌ WARNING: Movie DB mein add hui, par Algolia mein fail ho gayi! /sync_algolia chalayein."))
 
+    # FIX 2: "updated" status ko handle karein
+    elif success_db == "updated":
+        await safe_tg_call(message.answer(f"✅ Movie '<b>{title}</b>' database mein update ho gayi."))
+        # 2. Algolia mein bhi update karein
+        success_algolia = await algolia_client.algolia_add_movie(algolia_data)
+        if success_algolia:
+            await safe_tg_call(message.answer("✅ Movie Algolia index mein bhi update ho gayi."))
+        else:
+            await safe_tg_call(message.answer("❌ WARNING: Movie DB mein update hui, par Algolia mein fail ho gayi! /sync_algolia chalayein."))
+
     elif success_db == "duplicate":
-        await safe_tg_call(message.answer(f"⚠️ Movie '<b>{title}</b>' pehle se database mein hai."))
+        await safe_tg_call(message.answer(f"⚠️ Movie '<b>{title}</b>' pehle se database mein hai (Integrity Error)."))
     else:
-        await safe_tg_call(message.answer("❌ Movie DB mein add karne me error aaya."))
+        await safe_tg_call(message.answer("❌ Movie DB mein add/update karne me error aaya."))
 
 @dp.message(Command("import_json"), AdminFilter())
 @handler_timeout(1800) # 30 min
@@ -705,9 +720,10 @@ async def import_json_command(message: types.Message):
 
     total = len(movies_json_list)
     added_db = 0
+    updated_db = 0  # <-- FIX 2: Updated counter
     skipped_db = 0
     failed_db = 0
-    algolia_batch_to_add = [] # Algolia mein add karne ke liye batch
+    algolia_batch_to_add_or_update = [] # Algolia mein add/update karne ke liye batch
     
     progress_msg = await safe_tg_call(message.answer(f"⏳ (Step 1/2) JSON import DB mein shuru... Total {total} movies."))
     if not progress_msg: return
@@ -727,13 +743,18 @@ async def import_json_command(message: types.Message):
                 file_id=file_id, message_id=AUTO_MESSAGE_ID_PLACEHOLDER, channel_id=0
             ), default=False)
             
+            algolia_data = {
+                'objectID': imdb_id, 'imdb_id': imdb_id,
+                'title': parsed_info["title"], 'year': parsed_info["year"]
+            }
+
+            # FIX 2: "updated" status ko handle karein
             if success_db is True:
                 added_db += 1
-                # Agar DB mein success hui, toh ise Algolia batch list mein daal dein
-                algolia_batch_to_add.append({
-                    'objectID': imdb_id, 'imdb_id': imdb_id,
-                    'title': parsed_info["title"], 'year': parsed_info["year"]
-                })
+                algolia_batch_to_add_or_update.append(algolia_data)
+            elif success_db == "updated":
+                updated_db += 1
+                algolia_batch_to_add_or_update.append(algolia_data)
             elif success_db == "duplicate":
                 skipped_db += 1
             else:
@@ -745,36 +766,36 @@ async def import_json_command(message: types.Message):
             try:
                 await safe_tg_call(progress_msg.edit_text(
                     f"⏳ (Step 1/2) Processing DB... {i+1}/{total}\n"
-                    f"✅ Added DB: {added_db} | ↷ Skipped DB: {skipped_db} | ❌ Failed DB: {failed_db}"
+                    f"✅ Added: {added_db} | 🔄 Updated: {updated_db} | ↷ Skipped: {skipped_db} | ❌ Failed: {failed_db}"
                 ))
             except TelegramBadRequest: pass
             await asyncio.sleep(0.5) 
 
     await safe_tg_call(progress_msg.edit_text(
         f"✅ <b>DB Import Complete!</b>\n"
-        f"• Added: {added_db} | Skipped: {skipped_db} | Failed: {failed_db}\n\n"
-        f"⏳ (Step 2/2) Ab {len(algolia_batch_to_add)} nayi movies ko Algolia mein upload kiya ja raha hai..."
+        f"• Added: {added_db} | Updated: {updated_db} | Skipped: {skipped_db} | Failed: {failed_db}\n\n"
+        f"⏳ (Step 2/2) Ab {len(algolia_batch_to_add_or_update)} movies ko Algolia mein upload/update kiya ja raha hai..."
     ))
 
-    # 2. Sabhi nayi movies ko ek saath batch mein Algolia par upload karein
-    if algolia_batch_to_add:
-        success_algolia = await algolia_client.algolia_add_batch_movies(algolia_batch_to_add)
+    # 2. Sabhi nayi/updated movies ko ek saath batch mein Algolia par upload karein
+    if algolia_batch_to_add_or_update:
+        success_algolia = await algolia_client.algolia_add_batch_movies(algolia_batch_to_add_or_update)
         if success_algolia:
             await safe_tg_call(progress_msg.edit_text(
                 f"✅ <b>JSON Import Complete! (DB + Algolia)</b>\n"
-                f"• DB Added: {added_db} | DB Skipped: {skipped_db}\n"
-                f"• Algolia Uploaded: {len(algolia_batch_to_add)}"
+                f"• DB Added: {added_db} | DB Updated: {updated_db} | DB Skipped: {skipped_db}\n"
+                f"• Algolia Uploaded/Updated: {len(algolia_batch_to_add_or_update)}"
             ))
         else:
              await safe_tg_call(progress_msg.edit_text(
                 f"❌ <b>JSON Import Failed!</b>\n"
-                f"• DB Added: {added_db}\n"
+                f"• DB Added: {added_db} | DB Updated: {updated_db}\n"
                 f"• Algolia Upload FAILED! /sync_algolia chalayein."
             ))
     else:
         await safe_tg_call(progress_msg.edit_text(
             f"✅ <b>JSON Import Complete!</b>\n"
-            f"• DB Added: {added_db} | DB Skipped: {skipped_db}\n"
+            f"• DB Added: {added_db} | DB Updated: {updated_db} | DB Skipped: {skipped_db}\n"
             f"• Algolia Upload: 0 (kuch naya nahi tha)"
         ))
 
@@ -845,7 +866,7 @@ async def sync_algolia_command(message: types.Message):
         await safe_tg_call(message.answer(f"✅ DB se {len(all_movies_db)} movies fetch ho gayi. Ab Algolia par upload kiya ja raha hai..."))
         
         # 2. Algolia par data bhej
-        # Yeh function (algolia_client.py mein) batch mein upload karega aur index ko clear karega
+        # FIX 4: Yeh ab behtar 'replace_all_objects_async' function (algolia_client.py mein) ka istemaal karega
         success, total_uploaded = await algolia_client.algolia_sync_data(all_movies_db)
         
         if success:
@@ -916,25 +937,35 @@ async def auto_index_handler(message: types.Message):
     file_id = message.video.file_id if message.video else message.document.file_id
     imdb_id = movie_info.get("imdb_id", f"auto_{message.message_id}") 
     
-    # 1. DB mein add karein
+    # 1. DB mein add/update karein
     success_db = await safe_db_call(db.add_movie(
         imdb_id=imdb_id, title=movie_info.get("title"), year=movie_info.get("year"),
         file_id=file_id, message_id=message.message_id, channel_id=message.chat.id,
     ), default=False)
     
+    algolia_data = {
+        'objectID': imdb_id, 'imdb_id': imdb_id,
+        'title': movie_info.get("title"), 'year': movie_info.get("year")
+    }
+
     if success_db is True:
         logger.info(f"Auto-indexed to DB: {movie_info.get('title')}")
-        
         # 2. Ab Algolia mein bhi add karein
-        algolia_data = {
-            'objectID': imdb_id, 'imdb_id': imdb_id,
-            'title': movie_info.get("title"), 'year': movie_info.get("year")
-        }
         success_algolia = await algolia_client.algolia_add_movie(algolia_data)
         if success_algolia:
             logger.info(f"Auto-indexed to Algolia: {movie_info.get('title')}")
         else:
             logger.error(f"Auto-index FAILED for Algolia: {movie_info.get('title')}")
+
+    # FIX 2: "updated" status ko handle karein
+    elif success_db == "updated":
+        logger.info(f"Auto-indexed (updated) in DB: {movie_info.get('title')}")
+        # 2. Algolia mein bhi update karein
+        success_algolia = await algolia_client.algolia_add_movie(algolia_data)
+        if success_algolia:
+            logger.info(f"Auto-indexed (updated) in Algolia: {movie_info.get('title')}")
+        else:
+            logger.error(f"Auto-index FAILED for Algolia (update): {movie_info.get('title')}")
 
     elif success_db == "duplicate":
         logger.info(f"Auto-index skipped (duplicate): {movie_info.get('title')}")
