@@ -13,7 +13,7 @@ logger = logging.getLogger("database")
 Base = declarative_base()
 
 # Yeh placeholder ID JSON se import ki gayi files ke liye hai
-AUTO_MESSAGE_ID_PLACEHOLDER = 9090909090 
+AUTO_MESSAGE_ID_PLACEHOLDER = 9090909090
 
 def clean_text_for_search(text: str) -> str:
     """Search ke liye text ko saaf karne wala function (ab DB mein save karne ke liye use hoga)."""
@@ -42,13 +42,13 @@ class Movie(Base):
     imdb_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
     clean_title = Column(String, nullable=False, index=True)
-    year = Column(String(10), nullable=True) 
-    
-    file_id = Column(String, nullable=False, index=True) 
+    year = Column(String(10), nullable=True)
+
+    file_id = Column(String, nullable=False, index=True)
     channel_id = Column(BigInteger, nullable=False)
     message_id = Column(BigInteger, nullable=False)
     added_date = Column(DateTime, default=datetime.utcnow)
-    
+
     __table_args__ = (UniqueConstraint('file_id', name='uq_file_id'),)
 
 
@@ -60,39 +60,42 @@ class Database:
              logger.info("External database URL detected, setting ssl='require'.")
         else:
              logger.info("Internal database URL detected, using default SSL (none).")
-        
-        # Pichla fix (statement_cache_size in connect_args) kaam nahi kiya.
-        # Hum ise ab seedha URL mein add karenge.
 
+        # --- YAHI HAI MUKHYA FIX ---
+        # Render/pgbouncer ke saath compatibility ke liye prepared statement cache ko disable karein
+        # Ise connect_args mein hi dena hai, URL mein nahi.
+        connect_args['statement_cache_size'] = 0
+        logger.info("Setting statement_cache_size=0 in connect_args for pgbouncer compatibility.")
+        # --- FIX END ---
+
+        # URL modification sirf protocol badalne ke liye
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
             database_url_mod = database_url.replace('postgres://', 'postgresql+asyncpg://', 1)
         else:
-            database_url_mod = database_url 
+            database_url_mod = database_url
 
-        # --- YAHI HAI MUKHYA FIX 2 (Database) ---
-        # Render/pgbouncer ke saath compatibility ke liye prepared statement cache ko disable karein
-        # Ise URL parameter ke roop mein add karein
-        if '?' in database_url_mod:
-            database_url_mod += "&statement_cache_size=0"
-        else:
-            database_url_mod += "?statement_cache_size=0"
-        logger.info("Appended 'statement_cache_size=0' to DB URL for pgbouncer compatibility.")
-        # --- FIX END ---
+        # Pichla URL wala fix hata diya gaya hai
+        # if '?' in database_url_mod:
+        #     database_url_mod += "&statement_cache_size=0"
+        # else:
+        #     database_url_mod += "?statement_cache_size=0"
+        # logger.info("Appended 'statement_cache_size=0' to DB URL for pgbouncer compatibility.")
+
 
         self.database_url = database_url_mod
-        
+
         self.engine = create_async_engine(
-            self.database_url, # Ab URL mein fix shaamil hai
-            echo=False, 
-            connect_args=connect_args, # Yahaan ab sirf SSL bacha hai
+            self.database_url,
+            echo=False,
+            connect_args=connect_args, # Ab 'connect_args' mein fix shaamil hai
             pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=8,
         )
-        
+
         self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-        logger.info(f"Database engine initialized (SSL: {connect_args.get('ssl', 'default')})")
-        
+        logger.info(f"Database engine initialized (SSL: {connect_args.get('ssl', 'default')}, Cache: {connect_args.get('statement_cache_size')})")
+
     async def _handle_db_error(self, e: Exception) -> bool:
         """Connection errors ko handle karein."""
         if isinstance(e, (OperationalError, DisconnectionError)):
@@ -104,8 +107,8 @@ class Database:
             except Exception as re_e:
                 logger.critical(f"Failed to dispose DB engine: {re_e}", exc_info=True)
                 return False
-        return False 
-        
+        return False
+
     async def init_db(self):
         """Database table banayein."""
         max_retries = 3
@@ -122,7 +125,7 @@ class Database:
                     continue
                 if attempt == max_retries - 1:
                     raise
-    
+
     async def add_user(self, user_id, username, first_name, last_name):
         """User ko add ya update karein."""
         max_retries = 2
@@ -212,9 +215,9 @@ class Database:
                 stmt = select(Movie).where(or_(Movie.imdb_id == imdb_id, Movie.file_id == file_id))
                 result = await session.execute(stmt)
                 movie = result.scalar_one_or_none()
-                
+
                 clean = clean_text_for_search(title)
-                
+
                 if movie:
                     movie.imdb_id = imdb_id
                     movie.title = title
@@ -232,16 +235,16 @@ class Database:
                     )
                     session.add(movie)
                     await session.commit()
-                    return True 
+                    return True
         except IntegrityError as e:
             if session: await session.rollback()
             logger.warning(f"Duplicate entry skipped (IntegrityError): {title} (IMDB: {imdb_id} or FileID: {file_id}).")
-            return "duplicate" 
+            return "duplicate"
         except Exception as e:
             if session: await session.rollback()
-            if await self._handle_db_error(e): 
+            if await self._handle_db_error(e):
                 await asyncio.sleep(1)
-                return await self.add_movie(imdb_id, title, year, file_id, message_id, channel_id) 
+                return await self.add_movie(imdb_id, title, year, file_id, message_id, channel_id)
             logger.error(f"add_movie error: {e}", exc_info=True)
             return False
 
@@ -277,9 +280,9 @@ class Database:
             async with self.SessionLocal() as session:
                 result = await session.execute(select(func.count(Movie.id)))
                 total = result.scalar_one()
-                
+
                 update_query = text(r"""
-                    UPDATE movies 
+                    UPDATE movies
                     SET clean_title = trim(
                         regexp_replace(
                             regexp_replace(
@@ -324,7 +327,7 @@ class Database:
             async with self.SessionLocal() as session:
                 result = await session.execute(select(Movie.imdb_id, Movie.title, Movie.year))
                 movies = result.all()
-                
+
                 return [
                     {
                         'objectID': m.imdb_id,
@@ -336,7 +339,7 @@ class Database:
                 ]
         except Exception as e:
             logger.error(f"get_all_movies_for_sync error: {e}", exc_info=True)
-            return None 
+            return None
 
     async def export_users(self, limit: int = 2000) -> List[Dict]:
         """Users ko CSV export ke liye fetch karein."""
