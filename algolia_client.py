@@ -19,18 +19,18 @@ if not ALGOLIA_APP_ID or not ALGOLIA_ADMIN_KEY or not ALGOLIA_INDEX_NAME:
     logger.critical("Algolia APP_ID, ADMIN_KEY, ya INDEX_NAME environment variables missing!")
 else:
     try:
-        # ✅ FIX: SearchClient को सही तरीके से Initialize करना
-        client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+        # ✅ FIX 2: Client ko .create() method se initialize karein
+        client = SearchClient.create(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         index = client.init_index(ALGOLIA_INDEX_NAME)
         
-        # Index settings (Fuzzy Search और Performance के लिए)
+        # Index settings (Fuzzy Search aur Performance ke liye)
         index.set_settings({
-            # Typo Tolerance (Kantra -> Kantara) के लिए
+            # Typo Tolerance (Kantra -> Kantara) ke liye
             'minWordSizefor1Typo': 3, # 3 अक्षरों के शब्द पर 1 typo की अनुमति
             'minWordSizefor2Typos': 7, # 7 अक्षरों के शब्द पर 2 typos की अनुमति
             'hitsPerPage': 20,
             
-            # Title को main search attribute बनाएं (ताकि "ktr" भी काम करे)
+            # Title को main search attribute बनाएं (ताकि "ktr" bhi काम करे)
             'searchableAttributes': [
                 'title',
                 'imdb_id',
