@@ -307,7 +307,7 @@ def get_join_keyboard():
 
 def get_full_limit_keyboard():
     if not ALTERNATE_BOTS: return None
-    buttons = [[InlineKeyboardButton(text=f"🚀 @{b}", url=f"https.://t.me/{b}")] for b in ALTERNATE_BOTS]
+    buttons = [[InlineKeyboardButton(text=f"🚀 @{b}", url=f"https://t.me/{b}")] for b in ALTERNATE_BOTS]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def extract_movie_info(caption: str):
@@ -745,17 +745,7 @@ async def get_movie_callback(callback: types.CallbackQuery):
         except: pass # Ignore if original message edit fails
 
 
-# --- ADMIN COMMANDS (Copied from previous correct version, ensure safe calls and dual writes) ---
-# ... [stats_command] ...
-# ... [broadcast_command] ...
-# ... [cleanup_users_command] ...
-# ... [add_movie_command] ...
-# ... [import_json_command] ...
-# ... [remove_dead_movie_command] ...
-# ... [sync_algolia_command] ...
-# ... [rebuild_index_command] ...
-# ... [export_csv_command] ...
-# ... [set_limit_command] ...
+# --- ADMIN COMMANDS (Stable if/else syntax) ---
 
 @dp.message(Command("stats"), AdminFilter())
 @handler_timeout(15)
@@ -805,13 +795,10 @@ async def broadcast_command(message: types.Message):
             if processed_count < total: await asyncio.sleep(1) # Sleep between batches
 
     txt = f"✅ Broadcast Done!\nSent: {s:,}\nFailed/Blocked: {f:,}\nTotal: {total:,}"
-    # --- FIX START ---
-    # Replaced: if msg: await safe_tg_call(msg.edit_text(txt)); else: await safe_tg_call(message.answer(txt))
     if msg:
         await safe_tg_call(msg.edit_text(txt))
     else:
         await safe_tg_call(message.answer(txt))
-    # --- FIX END ---
 
 
 @dp.message(Command("cleanup_users"), AdminFilter())
@@ -821,13 +808,10 @@ async def cleanup_users_command(message: types.Message):
     removed = await safe_db_call(db.cleanup_inactive_users(days=30), timeout=90, default=0)
     new_count = await safe_db_call(db.get_user_count(), default=0)
     txt = f"✅ Cleanup done!\nDeactivated: {removed:,}\nNow Active: {new_count:,}"
-    # --- FIX START ---
-    # Replaced: if msg: await safe_tg_call(msg.edit_text(txt)); else: await safe_tg_call(message.answer(txt))
     if msg:
         await safe_tg_call(msg.edit_text(txt))
     else:
         await safe_tg_call(message.answer(txt))
-    # --- FIX END ---
 
 @dp.message(Command("add_movie"), AdminFilter())
 @handler_timeout(20)
@@ -849,13 +833,10 @@ async def add_movie_command(message: types.Message):
     elif db_res == "duplicate":
         ag_stat = "ℹ️ Algolia Skipped (DB duplicate)."
     txt = f"{db_stat}\n{ag_stat}".strip()
-    # --- FIX START ---
-    # Replaced: if msg: await safe_tg_call(msg.edit_text(txt)); else: await safe_tg_call(message.answer(txt))
     if msg:
         await safe_tg_call(msg.edit_text(txt))
     else:
         await safe_tg_call(message.answer(txt))
-    # --- FIX END ---
 
 
 @dp.message(Command("import_json"), AdminFilter())
@@ -922,13 +903,10 @@ async def remove_dead_movie_command(message: types.Message):
     ag_del = await algolia_remove_movie(imdb_id) # Returns True/False/None
     ag_stat = "✅ Algolia Removed." if ag_del else "ℹ️ Algolia Not Found or Error."
     txt = f"{db_stat}\n{ag_stat}";
-    # --- FIX START --- (This was the line from the error log)
-    # Replaced: if msg: await safe_tg_call(msg.edit_text(txt)); else: await safe_tg_call(message.answer(txt))
     if msg:
         await safe_tg_call(msg.edit_text(txt))
     else:
         await safe_tg_call(message.answer(txt))
-    # --- FIX END ---
 
 
 @dp.message(Command("sync_algolia"), AdminFilter())
@@ -962,14 +940,10 @@ async def rebuild_index_command(message: types.Message):
     # Added timeout to safe_db_call
     updated, total = await safe_db_call(db.rebuild_clean_titles(), timeout=240, default=(0,0)) # 4 min timeout for DB operation
     result_text = f"✅ DB Reindex done: Updated {updated:,} of ~{total:,} titles."
-    # --- FIX START ---
-    # Replaced: await safe_tg_call(msg.edit_text(result_text))
-    # This check prevents a crash if msg is None (e.g., if sending the "Rebuilding..." message failed)
     if msg:
         await safe_tg_call(msg.edit_text(result_text))
     else:
         await safe_tg_call(message.answer(result_text))
-    # --- FIX END ---
 
 
 @dp.message(Command("export_csv"), AdminFilter())
