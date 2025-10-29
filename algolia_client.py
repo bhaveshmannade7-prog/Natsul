@@ -41,13 +41,16 @@ async def initialize_algolia():
 
     logger.info("Attempting to initialize Algolia client (v4+)...")
     try:
-        # --- YEH HAI FIX ---
-        # Client 'SearchClient.create()' se banta hai, 'SearchClient()' se nahi
-        client = SearchClient.create(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+        # --- YEH HAI ALSLI FIX (PART 1) ---
+        # Client 'SearchClient(...)' se banta hai (bina .create)
+        client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+        
+        # --- YEH HAI ALSLI FIX (PART 2) ---
+        # Method ka naam 'init_index' nahi, 'index' hai
+        index = client.index(ALGOLIA_INDEX_NAME) 
         # ---
         
-        index = client.init_index(ALGOLIA_INDEX_NAME)
-        logger.info(f"Algolia client created for App ID: {ALGOLIA_APP_ID}, Index: {ALGOLIA_INDEX_NAME}")
+        logger.info(f"Algolia client and index initialized for: {ALGOLIA_INDEX_NAME}")
 
         # Check connection and apply settings
         logger.info("Fetching/Applying Algolia index settings...")
@@ -57,7 +60,6 @@ async def initialize_algolia():
             'queryType': 'prefixLast', 'attributesForFaceting': ['searchable(year)'],
             'typoTolerance': 'min', 'removeStopWords': True, 'ignorePlurals': True,
         }
-        # timeoute badha diye hain
         await index.set_settings_async(settings_to_apply, request_options={'timeout': 20}) 
         await index.get_settings_async(request_options={'timeout': 15}) 
         logger.info("Applied settings using async methods.")
@@ -68,7 +70,7 @@ async def initialize_algolia():
 
     except AttributeError as ae:
         # Yeh error ab nahi aana chahiye
-        logger.critical(f"ALGOLIA VERSION ERROR: {ae}. Ensure 'algoliasearch>=4.0.0' is installed!", exc_info=True)
+        logger.critical(f"ALGOLIA VERSION ERROR: {ae}. API mismatch!", exc_info=True)
         client = None
         index = None
         _is_ready = False
@@ -86,7 +88,7 @@ def is_algolia_ready():
     """Check if Algolia client and index were successfully initialized."""
     return _is_ready and client is not None and index is not None
 
-# --- Async Wrappers for Algolia Operations ---
+# --- Baaki file waise hi rahegi ---
 
 async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
     if not is_algolia_ready(): logger.error("Algolia not ready for search."); return []
