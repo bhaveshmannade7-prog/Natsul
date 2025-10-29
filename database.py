@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Any
 
+# ... (baaki imports waise hi) ...
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, BigInteger, String, DateTime, Boolean, Integer, func, select, or_, and_, text, delete, update, UniqueConstraint
@@ -16,14 +17,7 @@ Base = declarative_base()
 
 AUTO_MESSAGE_ID_PLACEHOLDER = 9090909090
 
-def clean_text_for_search(text: str) -> str:
-    if not text: return ""
-    text = text.lower()
-    text = re.sub(r'[^a-z0-9]+', ' ', text)
-    text = re.sub(r'\b(s|season)\s*\d{1,2}\b', '', text)
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
-
+# ... (clean_text_for_search, User, Movie classes waise hi) ...
 class User(Base):
     __tablename__ = 'users'
     user_id = Column(BigInteger, primary_key=True)
@@ -36,7 +30,7 @@ class User(Base):
 
 class Movie(Base):
     __tablename__ = 'movies'
-    # ZAROORI: Aapko yeh column manually add karna hoga.
+    # ZAROORI: Aapko yeh column manually add karna hoga agar nahi kiya hai.
     id = Column(Integer, primary_key=True, autoincrement=True)
     imdb_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
@@ -48,25 +42,23 @@ class Movie(Base):
     added_date = Column(DateTime, default=datetime.utcnow)
     __table_args__ = (UniqueConstraint('file_id', name='uq_file_id'),)
 
+
 class Database:
     def __init__(self, database_url: str):
         connect_args = {}
         
-        # 1. SSL
+        # SSL
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # 2. PGBOUNCER FIX (Driver level)
-        # Yeh asyncpg driver ko batata hai ki statement cache na kare.
-        # YEH SABSE ZAROORI HAI AUR connect_args MEIN HI HONA CHAHIYE.
+        # PGBOUNCER FIX (Driver level) - YEH SAHI HAI
         connect_args['statement_cache_size'] = 0
         logger.info("Setting statement_cache_size=0 in connect_args (for asyncpg driver).")
-        # ---
 
-        # 3. URL modification
+        # URL modification
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -77,18 +69,16 @@ class Database:
         self.database_url = database_url_mod
 
         try:
-            # Create the async engine
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # <- YEH SAHI JAGEH HAI
+                connect_args=connect_args, # <- SAHI FIX YAHAN HAI
                 pool_size=5, 
                 max_overflow=10, 
-                pool_pre_ping=True, #<- Yeh pehli query chalata hai, isliye connect_args sahi hona zaroori hai
+                pool_pre_ping=True, 
                 pool_recycle=300, 
                 pool_timeout=10,
-                # 4. PGBOUNCER RUNTIME FIX (SQLAlchemy level)
-                # Yeh runtime errors (jaise __asyncpg_stmt_6__) ko rokta hai.
+                # PGBOUNCER RUNTIME FIX (SQLAlchemy level)
                 execution_options={"compiled_cache": None} 
             )
             
@@ -96,11 +86,10 @@ class Database:
             logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0 via connect_args, Compiled Cache: None)")
         
         except Exception as e:
-            # Agar yahan error aata hai, toh problem code mein nahi,
-            # balki connection string ya Pgbouncer setup mein hai.
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise 
 
+    # ... (baaki saare methods _handle_db_error, init_db, add_user, etc. waise hi rahenge) ...
     async def _handle_db_error(self, e: Exception) -> bool:
         """Handle connection errors."""
         if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)):
@@ -137,23 +126,20 @@ class Database:
             except Exception as e:
                 last_exception = e
                 logger.error(f"DB init failed (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}", exc_info=False)
-                # Yahan _handle_db_error ko call karna zaroori nahi,
-                # kyunki ProgrammingError mein retry nahi karna hai.
                 if isinstance(e, ProgrammingError):
-                    logger.critical("DB initialization failed permanently due to ProgrammingError (likely Pgbouncer cache).")
+                    logger.critical("DB initialization failed permanently due to ProgrammingError (likely Pgbouncer cache not cleared).")
                     raise last_exception
                 
-                # Connection errors ke liye retry karein
                 if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)) and attempt < max_retries - 1:
-                    await self._handle_db_error(e) # Pool dispose karega
+                    await self._handle_db_error(e) 
                     wait_time = 2 ** attempt
                     logger.warning(f"Retrying DB initialization in {wait_time}s...")
                     await asyncio.sleep(wait_time)
-                else: # Aakhri attempt ya anya error
+                else: 
                     logger.critical("DB initialization failed permanently.")
                     raise last_exception
 
-    # --- User Methods (Koi badlaav nahi) ---
+    # --- User Methods ---
     async def add_user(self, user_id, username, first_name, last_name):
         try:
             async with self.SessionLocal() as session:
@@ -229,19 +215,20 @@ class Database:
             await self._handle_db_error(e)
             return []
 
-    # --- Movie Methods (Koi badlaav nahi) ---
+    # --- Movie Methods ---
     async def get_movie_count(self) -> int:
         try:
             async with self.SessionLocal() as session:
+                # Agar 'id' column nahi hai, toh yeh fail hoga
                 return (await session.execute(select(func.count(Movie.id)))).scalar_one() 
         except ProgrammingError as pe:
              if "column movies.id does not exist" in str(pe):
-                 logger.critical("DATABASE SCHEMA ERROR: 'movies' table missing 'id' column! DROP/recreate table or run: ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;")
+                 logger.critical("DATABASE SCHEMA ERROR: 'movies' table missing 'id' column! PLEASE RUN: ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;")
                  return -1
-             else:
+             else: # Koi aur ProgrammingError (jaise Pgbouncer)
                  logger.error(f"get_movie_count ProgrammingError: {pe}", exc_info=False)
-                 await self._handle_db_error(pe)
-                 return -1
+                 await self._handle_db_error(pe) # Yeh False return karega
+                 return -1 # Error state indicate karein
         except Exception as e:
             logger.error(f"get_movie_count error: {e}", exc_info=False)
             await self._handle_db_error(e)
@@ -302,6 +289,7 @@ class Database:
         updated_count, total_count = 0, 0
         try:
             async with self.SessionLocal() as session:
+                # Agar 'id' column nahi hai, toh yeh fail hoga
                 total_count = (await session.execute(select(func.count(Movie.id)))).scalar_one_or_none() or 0
                 if total_count == 0: return (0, 0)
                 update_query = text(r"""UPDATE movies SET clean_title = trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g')) WHERE clean_title IS NULL OR clean_title = '' OR clean_title != trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g'));""")
