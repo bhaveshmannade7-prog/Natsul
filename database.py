@@ -36,7 +36,7 @@ class User(Base):
 
 class Movie(Base):
     __tablename__ = 'movies'
-    # YEH COLUMN AAPKO APNE RENDER DB MEIN MANUALLY ADD KARNA HOGA
+    # ZAROORI: Aapko yeh column manually add karna hoga.
     id = Column(Integer, primary_key=True, autoincrement=True)
     imdb_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
@@ -52,19 +52,14 @@ class Database:
     def __init__(self, database_url: str):
         connect_args = {}
         
-        # 1. SSL
+        # 1. SSL (Yeh sahi hai)
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # 2. PGBOUNCER FIX (Driver level)
-        connect_args['statement_cache_size'] = 0
-        logger.info("Setting statement_cache_size=0 in connect_args (for asyncpg driver).")
-        # ---
-
-        # 3. URL modification
+        # 2. URL modification
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -75,24 +70,42 @@ class Database:
         self.database_url = database_url_mod
 
         try:
+            # --- YEH HAI AAKHRI FIX ---
+            # Hum parameter ko seedhe engine ko de rahe hain,
+            # 'connect_args' ke andar nahi.
+            # Yeh SQLAlchemy ke 'asyncpg' dialect ko configure karta hai.
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # Driver-level fix
+                connect_args=connect_args, # Yahan ab sirf SSL hai
                 pool_size=5, 
                 max_overflow=10, 
                 pool_pre_ping=True, 
                 pool_recycle=300, 
                 pool_timeout=10,
-                # 4. PGBOUNCER RUNTIME FIX (SQLAlchemy level)
-                # Yeh 'InvalidSQLStatementNameError' (jaise __asyncpg_stmt_6__) 
-                # ko rokne ke liye SQLAlchemy ki caching ko disable karta hai.
-                execution_options={"compiled_cache": None}
+                statement_cache_size=0 # <-- YEH HAI ASLI FIX
             )
             
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0, Compiled Cache: None)")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Dialect Stmt Cache: 0)")
         
+        except TypeError as te:
+            # Agar yeh error aata hai ki 'statement_cache_size' invalid hai
+            # (jaisa pichhli baar 'prepared_statement_cache_size' ke saath hua tha),
+            # toh humara 'connect_args' wala tareeka hi sahi tha aur problem Pgbouncer cache ki thi.
+            logger.critical(f"Failed to create engine due to TypeError: {te}. Fallback needed.", exc_info=True)
+            # Fallback to connect_args method (just in case)
+            del connect_args['statement_cache_size'] # remove if added by mistake
+            connect_args['statement_cache_size'] = 0 # add it back correctly
+            self.engine = create_async_engine(
+                self.database_url,
+                echo=False,
+                connect_args=connect_args,
+                pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10
+            )
+            self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
+            logger.info("Fallback activated: Using connect_args={'statement_cache_size': 0}")
+            
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise 
@@ -123,6 +136,7 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
+                    # Yeh query ab fail nahi honi chahiye
                     await conn.execute(text("select pg_catalog.version()"))
                     logger.info("DB connection test successful.")
                     await conn.run_sync(Base.metadata.create_all)
@@ -140,7 +154,7 @@ class Database:
                     logger.critical("DB initialization failed permanently.")
                     raise last_exception 
 
-    # --- User Methods ---
+    # --- User Methods (Koi badlaav nahi) ---
     async def add_user(self, user_id, username, first_name, last_name):
         try:
             async with self.SessionLocal() as session:
@@ -169,7 +183,7 @@ class Database:
         except Exception as e:
             logger.error(f"get_concurrent_user_count error: {e}", exc_info=False)
             await self._handle_db_error(e)
-            return 9999 # Return high number
+            return 9999 
 
     async def get_user_count(self) -> int:
         try:
@@ -216,14 +230,13 @@ class Database:
             await self._handle_db_error(e)
             return []
 
-    # --- Movie Methods ---
+    # --- Movie Methods (Koi badlaav nahi) ---
     async def get_movie_count(self) -> int:
         try:
             async with self.SessionLocal() as session:
                 return (await session.execute(select(func.count(Movie.id)))).scalar_one() 
         except ProgrammingError as pe:
              if "column movies.id does not exist" in str(pe):
-                 # YEH ERROR AAYEGA - Step 3 dekhein
                  logger.critical("DATABASE SCHEMA ERROR: 'movies' table missing 'id' column! DROP/recreate table or run: ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;")
                  return -1
              else:
