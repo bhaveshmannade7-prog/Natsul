@@ -1,3 +1,5 @@
+# algolia_client.py
+
 import os
 import logging
 from typing import List, Dict, Tuple
@@ -11,7 +13,7 @@ load_dotenv()
 
 logger = logging.getLogger("bot.algolia")
 
-# Log the detected version *after* potential installation
+# Log the detected version
 try:
     logger.info(f"Detected algoliasearch version: {algoliasearch.__version__}")
 except Exception as e:
@@ -37,10 +39,13 @@ async def initialize_algolia():
         _is_ready = False
         return False
 
-    logger.info("Attempting to initialize Algolia client (expecting v4+)...")
+    logger.info("Attempting to initialize Algolia client (v4+)...")
     try:
-        # Assume v4+ is installed correctly due to requirements.txt and cache clearing
-        client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+        # --- YEH HAI FIX ---
+        # Client 'SearchClient.create()' se banta hai, 'SearchClient()' se nahi
+        client = SearchClient.create(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+        # ---
+        
         index = client.init_index(ALGOLIA_INDEX_NAME)
         logger.info(f"Algolia client created for App ID: {ALGOLIA_APP_ID}, Index: {ALGOLIA_INDEX_NAME}")
 
@@ -52,8 +57,9 @@ async def initialize_algolia():
             'queryType': 'prefixLast', 'attributesForFaceting': ['searchable(year)'],
             'typoTolerance': 'min', 'removeStopWords': True, 'ignorePlurals': True,
         }
-        await index.set_settings_async(settings_to_apply, request_options={'timeout': 15}) # Increased timeout
-        await index.get_settings_async(request_options={'timeout': 10}) # Confirm connection
+        # timeoute badha diye hain
+        await index.set_settings_async(settings_to_apply, request_options={'timeout': 20}) 
+        await index.get_settings_async(request_options={'timeout': 15}) 
         logger.info("Applied settings using async methods.")
 
         _is_ready = True
@@ -61,8 +67,8 @@ async def initialize_algolia():
         return True
 
     except AttributeError as ae:
-        # This error strongly suggests the WRONG version is installed
-        logger.critical(f"ALGOLIA VERSION ERROR: {ae}. 'SearchClient' likely missing 'init_index'. Ensure 'algoliasearch>=4.0.0' is installed and build cache was cleared!", exc_info=True)
+        # Yeh error ab nahi aana chahiye
+        logger.critical(f"ALGOLIA VERSION ERROR: {ae}. Ensure 'algoliasearch>=4.0.0' is installed!", exc_info=True)
         client = None
         index = None
         _is_ready = False
@@ -81,7 +87,6 @@ def is_algolia_ready():
     return _is_ready and client is not None and index is not None
 
 # --- Async Wrappers for Algolia Operations ---
-# Simplified: Assume v4+ and async methods exist after successful initialization
 
 async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
     if not is_algolia_ready(): logger.error("Algolia not ready for search."); return []
