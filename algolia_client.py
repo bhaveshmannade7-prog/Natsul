@@ -4,9 +4,12 @@ import os
 import logging
 from typing import List, Dict, Tuple
 import algoliasearch # Import the base library to check version
+
 # --- YEH HAI ASLI FIX (IMPORT) ---
-# Async client yahan se import hota hai
-from algoliasearch.search_client_async import SearchClientAsync
+# Async client 'algoliasearch.search.client_async' se import hota hai
+from algoliasearch.search.client_async import SearchClientAsync 
+# ---
+
 from dotenv import load_dotenv
 import asyncio
 
