@@ -4,9 +4,9 @@ import os
 import logging
 from typing import List, Dict, Tuple
 import algoliasearch # Import the base library to check version
-# --- YEH HAI FIX #1 ---
-# Import 'search_client' se hai, 'search.client' se nahi
-from algoliasearch.search_client import SearchClient 
+# --- YEH HAI ASLI FIX (IMPORT) ---
+# Async client yahan se import hota hai
+from algoliasearch.search_client_async import SearchClientAsync
 from dotenv import load_dotenv
 import asyncio
 
@@ -41,17 +41,16 @@ async def initialize_algolia():
         _is_ready = False
         return False
 
-    logger.info("Attempting to initialize Algolia client (v4+)...")
+    logger.info("Attempting to initialize Algolia client (v4+ Async)...")
     try:
-        # --- YEH HAI FIX #2 ---
-        # Client .create() method se banta hai
-        client = SearchClient.create(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+        # --- YEH HAI ASLI FIX (CREATE) ---
+        # Async client aise banta hai
+        client = SearchClientAsync.create(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         
-        # --- YEH HAI FIX #3 ---
-        # Method ka naam 'init_index' hai (jo ab kaam karega kyunki client sahi hai)
+        # Method ka naam 'init_index' hai (jo ab kaam karega)
         index = client.init_index(ALGOLIA_INDEX_NAME) 
         
-        logger.info(f"Algolia client and index initialized for: {ALGOLIA_INDEX_NAME}")
+        logger.info(f"Algolia Async client and index initialized for: {ALGOLIA_INDEX_NAME}")
 
         # Check connection and apply settings
         logger.info("Fetching/Applying Algolia index settings...")
@@ -70,14 +69,12 @@ async def initialize_algolia():
         return True
 
     except AttributeError as ae:
-        # Yeh error ab nahi aana chahiye
         logger.critical(f"ALGOLIA VERSION/API ERROR: {ae}. API mismatch!", exc_info=True)
         client = None
         index = None
         _is_ready = False
         return False
     except Exception as e:
-        # Catch other errors like connection issues, bad credentials
         logger.critical(f"Failed to initialize Algolia client or apply settings: {e}", exc_info=True)
         client = None
         index = None
@@ -96,7 +93,6 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
     try:
         results = await index.search_async(query, {'hitsPerPage': limit})
         hits = results.get('hits', [])
-        # FIX: Ensure title is present, provide fallback
         return [{'imdb_id': hit['objectID'], 'title': hit.get('title') or 'Title Missing', 'year': hit.get('year')} for hit in hits if 'objectID' in hit]
     except Exception as e: logger.error(f"Algolia search failed for '{query}': {e}", exc_info=True); return []
 
