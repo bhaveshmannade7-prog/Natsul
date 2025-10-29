@@ -36,6 +36,8 @@ class User(Base):
 
 class Movie(Base):
     __tablename__ = 'movies'
+    # YEH COLUMN AAPKO APNE RENDER DB MEIN MANUALLY ADD KARNA HOGA
+    # (Error 3 dekhein)
     id = Column(Integer, primary_key=True, autoincrement=True)
     imdb_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
@@ -51,22 +53,20 @@ class Database:
     def __init__(self, database_url: str):
         connect_args = {}
         
-        # 1. SSL Requirement Check
+        # 1. SSL
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # 2. --- YEH ASLI AUR AAKHRI FIX HAI ---
-        # Error hint ke anusaar, statement_cache_size=0 (as an INTEGER)
-        # ko `connect_args` dictionary mein pass karein.
-        # Yeh seedha `asyncpg.connect()` function ko pass hota hai.
+        # 2. PGBOUNCER FIX (Driver level)
+        # Yeh asyncpg driver ko batata hai ki statement cache na kare.
         connect_args['statement_cache_size'] = 0
-        logger.info("Setting statement_cache_size=0 (as integer) in connect_args for pgbouncer compatibility.")
+        logger.info("Setting statement_cache_size=0 in connect_args (for asyncpg driver).")
         # ---
 
-        # 3. URL modification for asyncpg driver
+        # 3. URL modification
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -81,20 +81,22 @@ class Database:
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # Yahan se { 'ssl': 'require', 'statement_cache_size': 0 } pass hoga
+                connect_args=connect_args, # Driver-level fix
                 pool_size=5, 
                 max_overflow=10, 
                 pool_pre_ping=True, 
                 pool_recycle=300, 
-                pool_timeout=10
-                # Koi aur invalid argument (jaise prepared_statement_cache_size) yahan nahi hai
+                pool_timeout=10,
+                # 4. PGBOUNCER FIX (SQLAlchemy level)
+                # Yeh SQLAlchemy ko batata hai ki compiled SQL ko cache na kare,
+                # jisse woh har baar prepared statement banane ki koshish nahi karega.
+                execution_options={"compiled_cache": None}
             )
             
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: {connect_args.get('statement_cache_size')})")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0, Compiled Cache: None)")
         
         except Exception as e:
-            # Yahan `TypeError: Invalid argument(s)` error nahi aayega
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise 
 
@@ -110,8 +112,7 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False 
         elif isinstance(e, ProgrammingError):
-             # Agar `DuplicatePreparedStatementError` fir bhi aata hai,
-             # iska matlab Pgbouncer cache clear nahi hua hai.
+             # Yeh error ab nahi aana chahiye
              logger.error(f"DB Programming Error: {e}", exc_info=True) 
              return False 
         else:
@@ -126,7 +127,6 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
-                    # Yeh query ab fail nahi honi chahiye
                     await conn.execute(text("select pg_catalog.version()"))
                     logger.info("DB connection test successful.")
                     await conn.run_sync(Base.metadata.create_all)
@@ -144,9 +144,7 @@ class Database:
                     logger.critical("DB initialization failed permanently.")
                     raise last_exception 
 
-    # --- Baaki saare methods (add_user, get_movie_count, etc.) ---
-    # --- (Inmein koi badlaav nahi chahiye) ---
-
+    # --- User Methods ---
     async def add_user(self, user_id, username, first_name, last_name):
         try:
             async with self.SessionLocal() as session:
@@ -229,6 +227,7 @@ class Database:
                 return (await session.execute(select(func.count(Movie.id)))).scalar_one() 
         except ProgrammingError as pe:
              if "column movies.id does not exist" in str(pe):
+                 # Yeh error abhi bhi aayega jab tak aap DB theek nahi karte
                  logger.critical("DATABASE SCHEMA ERROR: 'movies' table missing 'id' column! DROP/recreate table or run: ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;")
                  return -1
              else:
@@ -334,3 +333,4 @@ class Database:
             logger.error(f"export_movies error: {e}", exc_info=False)
             await self._handle_db_error(e)
             return []
+
