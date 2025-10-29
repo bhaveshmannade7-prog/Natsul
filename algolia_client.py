@@ -44,13 +44,18 @@ async def initialize_algolia():
         # Client 'SearchClient(...)' se banta hai (bina .create)
         client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         
-        # --- YEH HAI ASLI FINAL FIX ---
-        # 'algoliasearch' v4+ mein, method ka naam '.init_index()' nahi,
-        # balki seedha '.index()' hai.
-        index = client.index(ALGOLIA_INDEX_NAME) 
-        # ----------------------------
+        # +++ EXTRA LOGGING +++
+        logger.info(f"Algolia Client object created. Type: {type(client)}")
+        # Log available methods to see if init_index is really missing
+        # logger.debug(f"Client directory: {dir(client)}") 
+        # +++++++++++++++++++++++
+
+        # --- YEH HAI DOCUMENTATION KE HISAB SE SAHI FIX ---
+        # 'algoliasearch' v4+ mein, method ka naam '.init_index()' hai.
+        index = client.init_index(ALGOLIA_INDEX_NAME) 
+        # ---------------------------------------------------
         
-        logger.info(f"Algolia client and index initialized for: {ALGOLIA_INDEX_NAME}")
+        logger.info(f"Algolia client.init_index called successfully for: {ALGOLIA_INDEX_NAME}")
 
         # Check connection and apply settings
         logger.info("Fetching/Applying Algolia index settings...")
@@ -70,8 +75,10 @@ async def initialize_algolia():
         return True
 
     except AttributeError as ae:
-        # Yeh error ab nahi aana chahiye
+        # Agar yeh error phir aata hai, toh yeh bahut ajeeb hoga
         logger.critical(f"ALGOLIA VERSION/API ERROR: {ae}. API mismatch!", exc_info=True)
+        # Log client type again on error
+        if client: logger.error(f"Client object at time of error was: {type(client)}")
         client = None
         index = None
         _is_ready = False
