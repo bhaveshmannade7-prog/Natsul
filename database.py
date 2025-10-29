@@ -52,14 +52,21 @@ class Database:
     def __init__(self, database_url: str):
         connect_args = {}
         
-        # 1. SSL (Yeh sahi hai)
+        # 1. SSL
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # 2. URL modification
+        # 2. PGBOUNCER FIX (Driver level)
+        # Yeh asyncpg driver ko batata hai ki statement cache na kare.
+        # YEH SABSE ZAROORI HAI AUR connect_args MEIN HI HONA CHAHIYE.
+        connect_args['statement_cache_size'] = 0
+        logger.info("Setting statement_cache_size=0 in connect_args (for asyncpg driver).")
+        # ---
+
+        # 3. URL modification
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -70,43 +77,27 @@ class Database:
         self.database_url = database_url_mod
 
         try:
-            # --- YEH HAI AAKHRI FIX ---
-            # Hum parameter ko seedhe engine ko de rahe hain,
-            # 'connect_args' ke andar nahi.
-            # Yeh SQLAlchemy ke 'asyncpg' dialect ko configure karta hai.
+            # Create the async engine
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # Yahan ab sirf SSL hai
+                connect_args=connect_args, # <- YEH SAHI JAGEH HAI
                 pool_size=5, 
                 max_overflow=10, 
-                pool_pre_ping=True, 
+                pool_pre_ping=True, #<- Yeh pehli query chalata hai, isliye connect_args sahi hona zaroori hai
                 pool_recycle=300, 
                 pool_timeout=10,
-                statement_cache_size=0 # <-- YEH HAI ASLI FIX
+                # 4. PGBOUNCER RUNTIME FIX (SQLAlchemy level)
+                # Yeh runtime errors (jaise __asyncpg_stmt_6__) ko rokta hai.
+                execution_options={"compiled_cache": None} 
             )
             
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Dialect Stmt Cache: 0)")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0 via connect_args, Compiled Cache: None)")
         
-        except TypeError as te:
-            # Agar yeh error aata hai ki 'statement_cache_size' invalid hai
-            # (jaisa pichhli baar 'prepared_statement_cache_size' ke saath hua tha),
-            # toh humara 'connect_args' wala tareeka hi sahi tha aur problem Pgbouncer cache ki thi.
-            logger.critical(f"Failed to create engine due to TypeError: {te}. Fallback needed.", exc_info=True)
-            # Fallback to connect_args method (just in case)
-            del connect_args['statement_cache_size'] # remove if added by mistake
-            connect_args['statement_cache_size'] = 0 # add it back correctly
-            self.engine = create_async_engine(
-                self.database_url,
-                echo=False,
-                connect_args=connect_args,
-                pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10
-            )
-            self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info("Fallback activated: Using connect_args={'statement_cache_size': 0}")
-            
         except Exception as e:
+            # Agar yahan error aata hai, toh problem code mein nahi,
+            # balki connection string ya Pgbouncer setup mein hai.
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise 
 
@@ -122,6 +113,7 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False 
         elif isinstance(e, ProgrammingError):
+             # Yeh error ab sirf tab aana chahiye agar Pgbouncer pool clear nahi hua hai
              logger.error(f"DB Programming Error: {e}", exc_info=True) 
              return False 
         else:
@@ -145,14 +137,21 @@ class Database:
             except Exception as e:
                 last_exception = e
                 logger.error(f"DB init failed (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}", exc_info=False)
-                can_retry = await self._handle_db_error(e)
-                if can_retry and attempt < max_retries - 1:
+                # Yahan _handle_db_error ko call karna zaroori nahi,
+                # kyunki ProgrammingError mein retry nahi karna hai.
+                if isinstance(e, ProgrammingError):
+                    logger.critical("DB initialization failed permanently due to ProgrammingError (likely Pgbouncer cache).")
+                    raise last_exception
+                
+                # Connection errors ke liye retry karein
+                if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)) and attempt < max_retries - 1:
+                    await self._handle_db_error(e) # Pool dispose karega
                     wait_time = 2 ** attempt
                     logger.warning(f"Retrying DB initialization in {wait_time}s...")
                     await asyncio.sleep(wait_time)
-                else:
+                else: # Aakhri attempt ya anya error
                     logger.critical("DB initialization failed permanently.")
-                    raise last_exception 
+                    raise last_exception
 
     # --- User Methods (Koi badlaav nahi) ---
     async def add_user(self, user_id, username, first_name, last_name):
