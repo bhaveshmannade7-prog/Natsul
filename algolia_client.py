@@ -41,14 +41,13 @@ async def initialize_algolia():
 
     logger.info("Attempting to initialize Algolia client (v4+)...")
     try:
-        # --- YEH HAI ALSLI FIX (PART 1) ---
         # Client 'SearchClient(...)' se banta hai (bina .create)
         client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         
-        # --- YEH HAI ALSLI FIX (PART 2) ---
-        # Method ka naam 'init_index' nahi, 'index' hai
-        index = client.index(ALGOLIA_INDEX_NAME) 
-        # ---
+        # +++++ YEH HAI ASLI FIX +++++
+        # Method ka naam 'init_index' hai, 'index' nahi.
+        index = client.init_index(ALGOLIA_INDEX_NAME) 
+        # ++++++++++++++++++++++++++++
         
         logger.info(f"Algolia client and index initialized for: {ALGOLIA_INDEX_NAME}")
 
