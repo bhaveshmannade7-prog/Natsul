@@ -37,7 +37,6 @@ class User(Base):
 class Movie(Base):
     __tablename__ = 'movies'
     # YEH COLUMN AAPKO APNE RENDER DB MEIN MANUALLY ADD KARNA HOGA
-    # (Error 3 dekhein)
     id = Column(Integer, primary_key=True, autoincrement=True)
     imdb_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
@@ -61,7 +60,6 @@ class Database:
              logger.info("Internal DB URL: using default SSL.")
 
         # 2. PGBOUNCER FIX (Driver level)
-        # Yeh asyncpg driver ko batata hai ki statement cache na kare.
         connect_args['statement_cache_size'] = 0
         logger.info("Setting statement_cache_size=0 in connect_args (for asyncpg driver).")
         # ---
@@ -77,7 +75,6 @@ class Database:
         self.database_url = database_url_mod
 
         try:
-            # Create the async engine
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
@@ -87,9 +84,9 @@ class Database:
                 pool_pre_ping=True, 
                 pool_recycle=300, 
                 pool_timeout=10,
-                # 4. PGBOUNCER FIX (SQLAlchemy level)
-                # Yeh SQLAlchemy ko batata hai ki compiled SQL ko cache na kare,
-                # jisse woh har baar prepared statement banane ki koshish nahi karega.
+                # 4. PGBOUNCER RUNTIME FIX (SQLAlchemy level)
+                # Yeh 'InvalidSQLStatementNameError' (jaise __asyncpg_stmt_6__) 
+                # ko rokne ke liye SQLAlchemy ki caching ko disable karta hai.
                 execution_options={"compiled_cache": None}
             )
             
@@ -112,7 +109,6 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False 
         elif isinstance(e, ProgrammingError):
-             # Yeh error ab nahi aana chahiye
              logger.error(f"DB Programming Error: {e}", exc_info=True) 
              return False 
         else:
@@ -227,7 +223,7 @@ class Database:
                 return (await session.execute(select(func.count(Movie.id)))).scalar_one() 
         except ProgrammingError as pe:
              if "column movies.id does not exist" in str(pe):
-                 # Yeh error abhi bhi aayega jab tak aap DB theek nahi karte
+                 # YEH ERROR AAYEGA - Step 3 dekhein
                  logger.critical("DATABASE SCHEMA ERROR: 'movies' table missing 'id' column! DROP/recreate table or run: ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;")
                  return -1
              else:
@@ -333,4 +329,3 @@ class Database:
             logger.error(f"export_movies error: {e}", exc_info=False)
             await self._handle_db_error(e)
             return []
-
