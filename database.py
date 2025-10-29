@@ -36,7 +36,6 @@ class User(Base):
 
 class Movie(Base):
     __tablename__ = 'movies'
-    # Ensure 'id' column exists in your actual DB table.
     id = Column(Integer, primary_key=True, autoincrement=True)
     imdb_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
@@ -52,14 +51,22 @@ class Database:
     def __init__(self, database_url: str):
         connect_args = {}
         
-        # 1. SSL Requirement Check (Yeh sahi hai)
+        # 1. SSL Requirement Check
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # 2. URL modification for asyncpg driver (Yeh bhi sahi hai)
+        # 2. --- YEH ASLI AUR AAKHRI FIX HAI ---
+        # Error hint ke anusaar, statement_cache_size=0 (as an INTEGER)
+        # ko `connect_args` dictionary mein pass karein.
+        # Yeh seedha `asyncpg.connect()` function ko pass hota hai.
+        connect_args['statement_cache_size'] = 0
+        logger.info("Setting statement_cache_size=0 (as integer) in connect_args for pgbouncer compatibility.")
+        # ---
+
+        # 3. URL modification for asyncpg driver
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -70,48 +77,46 @@ class Database:
         self.database_url = database_url_mod
 
         try:
-            # 3. --- JAD SAHIT FIX (THE ROOT FIX) ---
-            # Hum SQLAlchemy dialect ko bata rahe hain ki prepared statements
-            # ka istemaal poori tarah se band kar de.
-            # Yeh 'connect_args' se behtar hai kyunki yeh engine level par kaam karta hai.
+            # Create the async engine
             self.engine = create_async_engine(
                 self.database_url,
                 echo=False,
-                connect_args=connect_args, # Yahan ab sirf SSL argument hai
+                connect_args=connect_args, # Yahan se { 'ssl': 'require', 'statement_cache_size': 0 } pass hoga
                 pool_size=5, 
                 max_overflow=10, 
                 pool_pre_ping=True, 
                 pool_recycle=300, 
-                pool_timeout=10,
-                prepared_statement_cache_size=None # <-- YEH HAI ASLI FIX
+                pool_timeout=10
+                # Koi aur invalid argument (jaise prepared_statement_cache_size) yahan nahi hai
             )
             
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Prepared Stmts: None)")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: {connect_args.get('statement_cache_size')})")
         
         except Exception as e:
+            # Yahan `TypeError: Invalid argument(s)` error nahi aayega
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
-            raise # Reraise the exception to stop the application startup
+            raise 
 
     async def _handle_db_error(self, e: Exception) -> bool:
         """Handle connection errors."""
-        # Check for specific asyncpg/SQLAlchemy connection errors
         if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)):
              logger.error(f"DB connection/operational error detected: {type(e).__name__}. Disposing engine pool.", exc_info=False)
              try:
                  if self.engine: await self.engine.dispose()
                  logger.info("DB engine pool disposed. Will reconnect on next request.")
-                 return True # Can retry
+                 return True 
              except Exception as re_e:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
-                 return False # Cannot recover
+                 return False 
         elif isinstance(e, ProgrammingError):
-             # Log ProgrammingErrors fully, including potential DuplicatePreparedStatementError
-             logger.error(f"DB Programming Error: {e}", exc_info=True) # Full traceback
-             return False # Cannot recover by disposing pool
+             # Agar `DuplicatePreparedStatementError` fir bhi aata hai,
+             # iska matlab Pgbouncer cache clear nahi hua hai.
+             logger.error(f"DB Programming Error: {e}", exc_info=True) 
+             return False 
         else:
              logger.error(f"Unhandled DB Exception: {type(e).__name__}: {e}", exc_info=True)
-             return False # Cannot recover
+             return False 
 
     async def init_db(self):
         """Initialize DB tables with retries."""
@@ -121,17 +126,15 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
-                    # Use the same query mentioned in the error log for connection check
+                    # Yeh query ab fail nahi honi chahiye
                     await conn.execute(text("select pg_catalog.version()"))
                     logger.info("DB connection test successful.")
-                    # Create tables
                     await conn.run_sync(Base.metadata.create_all)
                 logger.info("Database tables initialized/verified.")
-                return # Success
+                return 
             except Exception as e:
                 last_exception = e
                 logger.error(f"DB init failed (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}", exc_info=False)
-                # Attempt to handle the error (e.g., dispose pool)
                 can_retry = await self._handle_db_error(e)
                 if can_retry and attempt < max_retries - 1:
                     wait_time = 2 ** attempt
@@ -139,9 +142,11 @@ class Database:
                     await asyncio.sleep(wait_time)
                 else:
                     logger.critical("DB initialization failed permanently.")
-                    raise last_exception # Reraise the last exception after retries
+                    raise last_exception 
 
-    # --- User Methods ---
+    # --- Baaki saare methods (add_user, get_movie_count, etc.) ---
+    # --- (Inmein koi badlaav nahi chahiye) ---
+
     async def add_user(self, user_id, username, first_name, last_name):
         try:
             async with self.SessionLocal() as session:
@@ -221,7 +226,7 @@ class Database:
     async def get_movie_count(self) -> int:
         try:
             async with self.SessionLocal() as session:
-                return (await session.execute(select(func.count(Movie.id)))).scalar_one() # Count using the primary key 'id'
+                return (await session.execute(select(func.count(Movie.id)))).scalar_one() 
         except ProgrammingError as pe:
              if "column movies.id does not exist" in str(pe):
                  logger.critical("DATABASE SCHEMA ERROR: 'movies' table missing 'id' column! DROP/recreate table or run: ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;")
@@ -292,7 +297,6 @@ class Database:
             async with self.SessionLocal() as session:
                 total_count = (await session.execute(select(func.count(Movie.id)))).scalar_one_or_none() or 0
                 if total_count == 0: return (0, 0)
-                # Note: This query assumes PostgreSQL regex syntax
                 update_query = text(r"""UPDATE movies SET clean_title = trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g')) WHERE clean_title IS NULL OR clean_title = '' OR clean_title != trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g'));""")
                 result_proxy = await session.execute(update_query)
                 updated_count = result_proxy.rowcount
