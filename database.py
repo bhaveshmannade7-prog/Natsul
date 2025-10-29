@@ -24,7 +24,8 @@ class Database:
 
     async def _connect(self):
         """Internal method to establish connection and select collections."""
-        if self.client and self.db:
+        # FIX: Check using 'is None'
+        if self.client is not None and self.db is not None:
             # Ping to check connection
             try:
                 await self.client.admin.command('ping')
@@ -40,7 +41,6 @@ class Database:
         try:
             logger.info("Attempting to connect to MongoDB Atlas...")
             
-            # --- SSL FIX ---
             ca = certifi.where()
             
             self.client = AsyncIOMotorClient(
@@ -49,21 +49,16 @@ class Database:
                 tls=True, # Explicitly enable TLS/SSL
                 tlsCAFile=ca # certifi ka CA bundle use karein
             )
-            # --- END SSL FIX ---
 
             # Test connection
             await self.client.admin.command('ping')
             logger.info("MongoDB cluster connection successful (ping ok).")
 
-            # --- DATABASE NAME FIX ---
-            # get_default_database() ka istemaal na karein.
-            # Manually ek database naam chunein.
             DATABASE_NAME = "MovieBotDB" 
             self.db = self.client[DATABASE_NAME]
-            # --- END DATABASE NAME FIX ---
             
-            if not self.db:
-                # Yeh ab nahi hona chahiye
+            # FIX: Check using 'is None'
+            if self.db is None:
                 raise Exception(f"Could not select database: {DATABASE_NAME}")
 
             self.users = self.db["users"]
@@ -94,16 +89,14 @@ class Database:
             # Movie indexes
             await self.movies.create_index("imdb_id", unique=True)
             await self.movies.create_index("file_id", unique=True, partialFilterExpression={"file_id": {"$exists": True}})
-            # Text index for fallback search (if needed, though Algolia is primary)
             await self.movies.create_index("clean_title") 
             logger.info("Database indexes created/verified.")
         except OperationFailure as e:
-             # Handle "IndexOptionsConflict" or "IndexKeySpecsConflict" (means index exists with different options)
             if "IndexOptionsConflict" in str(e) or "IndexKeySpecsConflict" in str(e) or "already exists" in str(e):
                  logger.warning(f"Index creation warning (likely harmless): {e}")
             else:
                  logger.error(f"Failed to create indexes: {e}", exc_info=True)
-                 raise # Re-raise if it's a serious issue
+                 raise 
         except Exception as e:
             logger.error(f"Failed to create indexes: {e}", exc_info=True)
             raise
@@ -123,7 +116,8 @@ class Database:
 
     # --- User Methods ---
     async def add_user(self, user_id, username, first_name, last_name):
-        if not self.users: await self._connect()
+        # FIX: Check using 'is None'
+        if self.users is None: await self._connect()
         try:
             await self.users.update_one(
                 {"user_id": user_id},
@@ -144,7 +138,8 @@ class Database:
             await self._handle_db_error(e)
 
     async def deactivate_user(self, user_id: int):
-        if not self.users: await self._connect()
+        # FIX: Check using 'is None'
+        if self.users is None: await self._connect()
         try:
             await self.users.update_one(
                 {"user_id": user_id},
@@ -156,7 +151,8 @@ class Database:
             await self._handle_db_error(e)
 
     async def get_concurrent_user_count(self, minutes: int) -> int:
-        if not self.users: await self._connect()
+        # FIX: Check using 'is None'
+        if self.users is None: await self._connect()
         try:
             cutoff = datetime.utcnow() - timedelta(minutes=minutes)
             count = await self.users.count_documents({
@@ -170,7 +166,8 @@ class Database:
             return 9999 
 
     async def get_user_count(self) -> int:
-        if not self.users: await self._connect()
+        # FIX: Check using 'is None'
+        if self.users is None: await self._connect()
         try:
             count = await self.users.count_documents({"is_active": True})
             return count
@@ -180,7 +177,8 @@ class Database:
             return 0
 
     async def cleanup_inactive_users(self, days: int = 30) -> int:
-        if not self.users: await self._connect()
+        # FIX: Check using 'is None'
+        if self.users is None: await self._connect()
         try:
             cutoff = datetime.utcnow() - timedelta(days=days)
             filter_query = {
@@ -188,7 +186,6 @@ class Database:
                 "is_active": True
             }
             
-            # First, count how many users will be affected
             count = await self.users.count_documents(filter_query)
             
             if count > 0:
@@ -205,7 +202,8 @@ class Database:
             return 0
 
     async def get_all_users(self) -> List[int]:
-        if not self.users: await self._connect()
+        # FIX: Check using 'is None'
+        if self.users is None: await self._connect()
         try:
             users_cursor = self.users.find(
                 {"is_active": True},
@@ -218,7 +216,8 @@ class Database:
             return []
 
     async def export_users(self, limit: int = 2000) -> List[Dict]:
-        if not self.users: await self._connect()
+        # FIX: Check using 'is None'
+        if self.users is None: await self._connect()
         try:
             users_cursor = self.users.find().limit(limit)
             users = []
@@ -240,7 +239,8 @@ class Database:
 
     # --- Movie Methods ---
     async def get_movie_count(self) -> int:
-        if not self.movies: await self._connect()
+        # FIX: Check using 'is None'
+        if self.movies is None: await self._connect()
         try:
             count = await self.movies.count_documents({})
             return count
@@ -250,7 +250,8 @@ class Database:
             return -1
 
     async def get_movie_by_imdb(self, imdb_id: str) -> Dict | None:
-        if not self.movies: await self._connect()
+        # FIX: Check using 'is None'
+        if self.movies is None: await self._connect()
         try:
             movie = await self.movies.find_one({"imdb_id": imdb_id})
             return self._format_movie_doc(movie) if movie else None
@@ -261,6 +262,7 @@ class Database:
 
     def _format_movie_doc(self, movie_doc: Dict) -> Dict:
         """Helper to format MongoDB document to the structure bot.py expects."""
+        if not movie_doc: return None
         return {
             'imdb_id': movie_doc.get("imdb_id"),
             'title': movie_doc.get("title"),
@@ -271,7 +273,8 @@ class Database:
         }
 
     async def add_movie(self, imdb_id: str, title: str, year: str | None, file_id: str, message_id: int, channel_id: int, clean_title: str) -> Literal[True, "updated", "duplicate", False]:
-        if not self.movies: await self._connect()
+        # FIX: Check using 'is None'
+        if self.movies is None: await self._connect()
         
         movie_doc = {
             "imdb_id": imdb_id,
@@ -285,37 +288,32 @@ class Database:
         }
 
         try:
-            # Check if imdb_id or file_id already exists
             existing = await self.movies.find_one({
                 "$or": [{"imdb_id": imdb_id}, {"file_id": file_id}]
             })
             
             if existing:
-                # Update existing movie
                 await self.movies.update_one(
                     {"_id": existing["_id"]},
-                    {"$set": movie_doc} # Overwrite all fields with new data
+                    {"$set": movie_doc} 
                 )
                 return "updated"
             else:
-                # Insert new movie
                 await self.movies.insert_one(movie_doc)
                 return True
         
         except DuplicateKeyError as e:
             logger.warning(f"add_movie DuplicateKeyError: {title} ({imdb_id}/{file_id}). Error: {e.details}")
-            # This might happen in a race condition if index check logic fails
-            # Try to update just in case
             try:
                 await self.movies.update_one(
                     {"imdb_id": imdb_id},
                     {"$set": movie_doc},
-                    upsert=False # Don't upsert if imdb_id doesn't exist
+                    upsert=False 
                 )
-                return "updated" # Was a duplicate, but we updated it
+                return "updated" 
             except Exception as ue:
                  logger.error(f"Failed to update after DuplicateKeyError: {ue}")
-                 return "duplicate" # Failed to resolve, report as duplicate
+                 return "duplicate" 
         
         except Exception as e:
             logger.error(f"add_movie failed for {title} ({imdb_id}): {e}", exc_info=False)
@@ -323,7 +321,8 @@ class Database:
             return False
 
     async def remove_movie_by_imdb(self, imdb_id: str) -> bool:
-        if not self.movies: await self._connect()
+        # FIX: Check using 'is None'
+        if self.movies is None: await self._connect()
         try:
             result = await self.movies.delete_one({"imdb_id": imdb_id})
             return result.deleted_count > 0
@@ -333,14 +332,14 @@ class Database:
             return False
 
     async def rebuild_clean_titles(self, clean_title_func) -> Tuple[int, int]:
-        if not self.movies: await self._connect()
+        # FIX: Check using 'is None'
+        if self.movies is None: await self._connect()
         updated_count, total_count = 0, 0
         try:
             total_count = await self.movies.count_documents({})
             if total_count == 0:
                 return (0, 0)
 
-            # Find movies where clean_title is missing or empty
             cursor = self.movies.find(
                 {"$or": [{"clean_title": {"$exists": False}}, {"clean_title": ""}, {"clean_title": None}]},
                 {"title": 1}
@@ -370,7 +369,8 @@ class Database:
             return (updated_count, total_count)
 
     async def get_all_movies_for_sync(self) -> List[Dict] | None:
-        if not self.movies: await self._connect()
+        # FIX: Check using 'is None'
+        if self.movies is None: await self._connect()
         try:
             cursor = self.movies.find(
                 {},
@@ -391,7 +391,8 @@ class Database:
             return None
 
     async def export_movies(self, limit: int = 2000) -> List[Dict]:
-        if not self.movies: await self._connect()
+        # FIX: Check using 'is None'
+        if self.movies is None: await self._connect()
         try:
             cursor = self.movies.find().limit(limit)
             movies = []
