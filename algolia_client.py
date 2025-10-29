@@ -6,8 +6,8 @@ from typing import List, Dict, Tuple
 import algoliasearch # Import the base library to check version
 
 # --- YEH HAI ASLI FIX (IMPORT) ---
-# Async client 'algoliasearch.search.client_async' se import hota hai
-from algoliasearch.search.client_async import SearchClientAsync 
+# Sahi import path yeh hai (bina '.search.' ke)
+from algoliasearch.search_client_async import SearchClientAsync
 # ---
 
 from dotenv import load_dotenv
