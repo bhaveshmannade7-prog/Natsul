@@ -52,21 +52,14 @@ class Database:
     def __init__(self, database_url: str):
         connect_args = {}
         
-        # 1. SSL Requirement Check
+        # 1. SSL Requirement Check (Yeh sahi hai)
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # 2. --- SAHI FIX YAHAN HAI ---
-        # Pgbouncer fix: statement_cache_size=0 (as an INTEGER)
-        # Yeh connect_args ke through seedha asyncpg.connect() ko pass hota hai.
-        connect_args['statement_cache_size'] = 0
-        logger.info("Setting statement_cache_size=0 (as integer) in connect_args for pgbouncer compatibility.")
-        # ---
-
-        # 3. URL modification for asyncpg driver
+        # 2. URL modification for asyncpg driver (Yeh bhi sahi hai)
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -77,16 +70,25 @@ class Database:
         self.database_url = database_url_mod
 
         try:
-            # Create the async engine
+            # 3. --- JAD SAHIT FIX (THE ROOT FIX) ---
+            # Hum SQLAlchemy dialect ko bata rahe hain ki prepared statements
+            # ka istemaal poori tarah se band kar de.
+            # Yeh 'connect_args' se behtar hai kyunki yeh engine level par kaam karta hai.
             self.engine = create_async_engine(
-                self.database_url, # Original modified URL
+                self.database_url,
                 echo=False,
-                connect_args=connect_args, # Yahan se integer 0 aur SSL pass hoga
-                pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10
+                connect_args=connect_args, # Yahan ab sirf SSL argument hai
+                pool_size=5, 
+                max_overflow=10, 
+                pool_pre_ping=True, 
+                pool_recycle=300, 
+                pool_timeout=10,
+                prepared_statement_cache_size=None # <-- YEH HAI ASLI FIX
             )
+            
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            # Log message ko update kiya hai taaki
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: {connect_args.get('statement_cache_size')})")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Prepared Stmts: None)")
+        
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise # Reraise the exception to stop the application startup
@@ -94,7 +96,6 @@ class Database:
     async def _handle_db_error(self, e: Exception) -> bool:
         """Handle connection errors."""
         # Check for specific asyncpg/SQLAlchemy connection errors
-        # Note: DuplicatePreparedStatementError should NOT happen now with statement_cache_size=0
         if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)):
              logger.error(f"DB connection/operational error detected: {type(e).__name__}. Disposing engine pool.", exc_info=False)
              try:
@@ -105,7 +106,7 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False # Cannot recover
         elif isinstance(e, ProgrammingError):
-             # Log ProgrammingErrors fully, including potential DuplicatePreparedStatementError if fix fails
+             # Log ProgrammingErrors fully, including potential DuplicatePreparedStatementError
              logger.error(f"DB Programming Error: {e}", exc_info=True) # Full traceback
              return False # Cannot recover by disposing pool
         else:
