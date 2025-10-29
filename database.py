@@ -1,3 +1,5 @@
+# database.py
+
 import logging
 import re
 import asyncio
@@ -49,21 +51,15 @@ class Movie(Base):
 class Database:
     def __init__(self, database_url: str):
         connect_args = {}
-        # SSL Requirement Check (No change needed here)
+        
+        # 1. SSL Requirement Check (yeh connect_args mein hi rahega)
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # --- FINAL FIX for Pgbouncer Compatibility ---
-        # Error log hint points to this method.
-        # This tells the underlying asyncpg driver not to use prepared statements.
-        connect_args['statement_cache_size'] = 0
-        logger.info("Setting statement_cache_size=0 in connect_args for pgbouncer compatibility.")
-        # ---
-
-        # URL modification for asyncpg driver (No change needed here)
+        # 2. URL modification for asyncpg driver
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -71,19 +67,31 @@ class Database:
         else:
             database_url_mod = database_url
 
+        # 3. --- FINAL FIX for Pgbouncer Compatibility ---
+        # Setting ko seedhe URL mein append karein.
+        # Yeh sunishchit karta hai ki driver pehli hi connection se ise laagu karta hai.
+        if '?' in database_url_mod:
+            database_url_mod += '&statement_cache_size=0'
+        else:
+            database_url_mod += '?statement_cache_size=0'
+            
+        logger.info("Appended 'statement_cache_size=0' to DB URL for pgbouncer compatibility.")
+        # Ab iski connect_args mein zaroorat nahi hai.
+        # connect_args['statement_cache_size'] = 0 
+        # ---
+
         self.database_url = database_url_mod
 
         try:
-            # Create the async engine, passing connect_args to the driver
+            # Create the async engine
             self.engine = create_async_engine(
-                self.database_url,
+                self.database_url, # URL mein ab fix shaamil hai
                 echo=False,
-                connect_args=connect_args, # <- Correct place for driver-specific args
+                connect_args=connect_args, # Yahan ab sirf SSL setting (ya anya) hai
                 pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10
-                # Removed invalid 'disable_prepared_statements=True' argument
             )
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0)")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0 via URL)")
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise # Reraise the exception to stop the application startup
@@ -326,3 +334,4 @@ class Database:
             logger.error(f"export_movies error: {e}", exc_info=False)
             await self._handle_db_error(e)
             return []
+
