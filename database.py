@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple, Any, Literal
 from motor.motor_asyncio import AsyncIOMotorClient
 import pymongo
 from pymongo.errors import ConnectionFailure, DuplicateKeyError, OperationFailure
+import certifi # SSL Fix ke liye import karein
 
 logger = logging.getLogger("bot.database")
 
@@ -38,8 +39,20 @@ class Database:
 
         try:
             logger.info("Attempting to connect to MongoDB Atlas...")
-            # Set serverSelectionTimeoutMS to 10 seconds
-            self.client = AsyncIOMotorClient(self.database_url, serverSelectionTimeoutMS=10000)
+            
+            # --- SSL FIX ---
+            # certifi se certificate bundle ka path lein
+            ca = certifi.where()
+            
+            # Client banate waqt tls=True aur tlsCAFile=ca pass karein
+            self.client = AsyncIOMotorClient(
+                self.database_url, 
+                serverSelectionTimeoutMS=10000,
+                tls=True, # Explicitly enable TLS/SSL
+                tlsCAFile=ca # certifi ka CA bundle use karein
+            )
+            # --- END SSL FIX ---
+
             # Test connection
             await self.client.admin.command('ping')
             self.db = self.client.get_default_database() # Get DB from connection string
