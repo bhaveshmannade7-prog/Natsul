@@ -52,14 +52,21 @@ class Database:
     def __init__(self, database_url: str):
         connect_args = {}
         
-        # 1. SSL Requirement Check (yeh connect_args mein hi rahega)
+        # 1. SSL Requirement Check
         if '.com' in database_url or '.co' in database_url:
              connect_args['ssl'] = 'require'
              logger.info("External DB URL: setting ssl='require'.")
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # 2. URL modification for asyncpg driver
+        # 2. --- SAHI FIX YAHAN HAI ---
+        # Pgbouncer fix: statement_cache_size=0 (as an INTEGER)
+        # Yeh connect_args ke through seedha asyncpg.connect() ko pass hota hai.
+        connect_args['statement_cache_size'] = 0
+        logger.info("Setting statement_cache_size=0 (as integer) in connect_args for pgbouncer compatibility.")
+        # ---
+
+        # 3. URL modification for asyncpg driver
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
         elif database_url.startswith('postgres://'):
@@ -67,31 +74,19 @@ class Database:
         else:
             database_url_mod = database_url
 
-        # 3. --- FINAL FIX for Pgbouncer Compatibility ---
-        # Setting ko seedhe URL mein append karein.
-        # Yeh sunishchit karta hai ki driver pehli hi connection se ise laagu karta hai.
-        if '?' in database_url_mod:
-            database_url_mod += '&statement_cache_size=0'
-        else:
-            database_url_mod += '?statement_cache_size=0'
-            
-        logger.info("Appended 'statement_cache_size=0' to DB URL for pgbouncer compatibility.")
-        # Ab iski connect_args mein zaroorat nahi hai.
-        # connect_args['statement_cache_size'] = 0 
-        # ---
-
         self.database_url = database_url_mod
 
         try:
             # Create the async engine
             self.engine = create_async_engine(
-                self.database_url, # URL mein ab fix shaamil hai
+                self.database_url, # Original modified URL
                 echo=False,
-                connect_args=connect_args, # Yahan ab sirf SSL setting (ya anya) hai
+                connect_args=connect_args, # Yahan se integer 0 aur SSL pass hoga
                 pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=300, pool_timeout=10
             )
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0 via URL)")
+            # Log message ko update kiya hai taaki
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: {connect_args.get('statement_cache_size')})")
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise # Reraise the exception to stop the application startup
@@ -334,4 +329,3 @@ class Database:
             logger.error(f"export_movies error: {e}", exc_info=False)
             await self._handle_db_error(e)
             return []
-
