@@ -4,7 +4,9 @@ import os
 import logging
 from typing import List, Dict, Tuple
 import algoliasearch # Import the base library to check version
-from algoliasearch.search.client import SearchClient # v4+ import
+# --- YEH HAI FIX #1 ---
+# Import 'search_client' se hai, 'search.client' se nahi
+from algoliasearch.search_client import SearchClient 
 from dotenv import load_dotenv
 import asyncio
 
@@ -41,13 +43,13 @@ async def initialize_algolia():
 
     logger.info("Attempting to initialize Algolia client (v4+)...")
     try:
-        # Client 'SearchClient(...)' se banta hai
-        client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
+        # --- YEH HAI FIX #2 ---
+        # Client .create() method se banta hai
+        client = SearchClient.create(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         
-        # --- YEH HAI ASLI FIX ---
-        # Method ka naam 'init_index' hai, 'index' nahi
+        # --- YEH HAI FIX #3 ---
+        # Method ka naam 'init_index' hai (jo ab kaam karega kyunki client sahi hai)
         index = client.init_index(ALGOLIA_INDEX_NAME) 
-        # ---
         
         logger.info(f"Algolia client and index initialized for: {ALGOLIA_INDEX_NAME}")
 
