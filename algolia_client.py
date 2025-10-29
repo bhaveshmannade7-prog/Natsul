@@ -50,7 +50,7 @@ async def initialize_algolia():
         # Async client aise banta hai
         client = SearchClientAsync.create(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         
-        # Method ka naam 'init_index' hai (jo ab kaam karega)
+        # Method ka naam 'init_index' hai
         index = client.init_index(ALGOLIA_INDEX_NAME) 
         
         logger.info(f"Algolia Async client and index initialized for: {ALGOLIA_INDEX_NAME}")
@@ -63,6 +63,8 @@ async def initialize_algolia():
             'queryType': 'prefixLast', 'attributesForFaceting': ['searchable(year)'],
             'typoTolerance': 'min', 'removeStopWords': True, 'ignorePlurals': True,
         }
+        # --- YEH HAI ASLI FIX (METHODS) ---
+        # Sabhi methods ke aage '_async' lagana zaroori hai
         await index.set_settings_async(settings_to_apply, request_options={'timeout': 20}) 
         await index.get_settings_async(request_options={'timeout': 15}) 
         logger.info("Applied settings using async methods.")
@@ -94,6 +96,7 @@ def is_algolia_ready():
 async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
     if not is_algolia_ready(): logger.error("Algolia not ready for search."); return []
     try:
+        # --- YEH HAI ASLI FIX (METHOD) ---
         results = await index.search_async(query, {'hitsPerPage': limit})
         hits = results.get('hits', [])
         return [{'imdb_id': hit['objectID'], 'title': hit.get('title') or 'Title Missing', 'year': hit.get('year')} for hit in hits if 'objectID' in hit]
@@ -105,6 +108,7 @@ async def algolia_add_movie(movie_data: dict) -> bool:
          if 'imdb_id' in movie_data and movie_data['imdb_id']: movie_data['objectID'] = movie_data['imdb_id']
          else: logger.error(f"Missing objectID/imdb_id for Algolia add: {movie_data}"); return False
     try:
+        # --- YEH HAI ASLI FIX (METHOD) ---
         await index.save_object_async(movie_data)
         return True
     except Exception as e: logger.error(f"Algolia save_object failed for {movie_data.get('objectID', 'N/A')}: {e}", exc_info=True); return False
@@ -120,6 +124,7 @@ async def algolia_add_batch_movies(movies_list: List[dict]) -> bool:
         valid_movies.append(m)
     if not valid_movies: logger.warning("No valid items in batch."); return False
     try:
+        # --- YEH HAI ASLI FIX (METHOD) ---
         await index.save_objects_async(valid_movies, {"batchSize": 1000})
         logger.info(f"Algolia batch processed {len(valid_movies)} items.")
         return True
@@ -129,6 +134,7 @@ async def algolia_remove_movie(imdb_id: str) -> bool:
     if not is_algolia_ready(): logger.warning("Algolia not ready for remove_movie."); return False
     if not imdb_id: return False
     try:
+        # --- YEH HAI ASLI FIX (METHOD) ---
         await index.delete_object_async(imdb_id)
         logger.info(f"Algolia delete request for {imdb_id} submitted.")
         return True
@@ -139,6 +145,7 @@ async def algolia_remove_movie(imdb_id: str) -> bool:
 async def algolia_clear_index() -> bool:
     if not is_algolia_ready(): logger.warning("Algolia not ready for clear_index."); return False
     try:
+        # --- YEH HAI ASLI FIX (METHOD) ---
         await index.clear_objects_async()
         logger.info(f"Algolia index '{ALGOLIA_INDEX_NAME}' cleared.")
         return True
@@ -156,6 +163,7 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     if not valid_movies: logger.info("Sync: No valid data from DB, clearing index."); return await algolia_clear_index(), 0
     try:
         logger.info(f"Sync: Replacing Algolia index with {count:,} objects...")
+        # --- YEH HAI ASLI FIX (METHOD) ---
         await index.replace_all_objects_async(valid_movies, {"batchSize": 1000})
         logger.info(f"Sync completed (async replace).")
         return True, count
