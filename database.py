@@ -17,6 +17,32 @@ Base = declarative_base()
 
 AUTO_MESSAGE_ID_PLACEHOLDER = 9090909090
 
+# +++++ YEH HAI ASLI FIX +++++
+# Yeh function missing tha, jiski wajah se ImportError aa raha tha
+def clean_text_for_search(text: str) -> str:
+    """Cleans text for searching, matching the SQL logic."""
+    if not text:
+        return ""
+    try:
+        # 1. Lowercase
+        text = text.lower()
+        # 2. Remove "Season X" patterns (jaise 's1', 'season 02')
+        text = re.sub(r'\b(s|season)\s*\d{1,2}\b', '', text)
+        # 3. Replace all non-alphanumeric chars (letters/numbers ke alawa) with a space
+        text = re.sub(r'[^a-z0-9]', ' ', text)
+        # 4. Collapse multiple spaces into one
+        text = re.sub(r'\s+', ' ', text)
+        # 5. Trim leading/trailing spaces
+        return text.strip()
+    except Exception as e:
+        logger.error(f"Error in clean_text_for_search: {e}", exc_info=False)
+        # Fallback
+        try:
+            return " ".join(re.findall(r'\b\w+\b', str(text).lower())).strip()
+        except:
+            return "" # Return empty if everything fails
+# +++++++++++++++++++++++++++++
+
 # ... (clean_text_for_search, User, Movie classes waise hi) ...
 class User(Base):
     __tablename__ = 'users'
@@ -249,7 +275,10 @@ class Database:
         try:
             async with self.SessionLocal() as session:
                 movie = (await session.execute(select(Movie).where(or_(Movie.imdb_id == imdb_id, Movie.file_id == file_id)))).scalar_one_or_none()
-                clean_title_val = clean_text_for_search(title)
+                
+                # Ab yeh function 'clean_text_for_search' exist karta hai
+                clean_title_val = clean_text_for_search(title) 
+                
                 if movie:
                     movie.imdb_id = imdb_id
                     movie.title = title
@@ -292,7 +321,8 @@ class Database:
                 # Agar 'id' column nahi hai, toh yeh fail hoga
                 total_count = (await session.execute(select(func.count(Movie.id)))).scalar_one_or_none() or 0
                 if total_count == 0: return (0, 0)
-                update_query = text(r"""UPDATE movies SET clean_title = trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g')) WHERE clean_title IS NULL OR clean_title = '' OR clean_title != trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]+', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g'));""")
+                # Yeh SQL logic ab 'clean_text_for_search' function se match karti hai
+                update_query = text(r"""UPDATE movies SET clean_title = trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g')) WHERE clean_title IS NULL OR clean_title = '' OR clean_title != trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g'));""")
                 result_proxy = await session.execute(update_query)
                 updated_count = result_proxy.rowcount
                 await session.commit()
