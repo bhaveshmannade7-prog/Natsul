@@ -62,20 +62,20 @@ class Database:
     def __init__(self, database_url: str):
         connect_args = {}
         
-        # SSL
+        # +++++ YEH HAI FINAL FIX +++++
+        # 'psycopg' driver 'ssl' nahi, 'sslmode' expect karta hai
         if '.com' in database_url or '.co' in database_url:
-             connect_args['ssl'] = 'require'
-             logger.info("External DB URL: setting ssl='require'.")
+             connect_args['sslmode'] = 'require' 
+             logger.info("External DB URL: setting sslmode='require'.")
+        # +++++++++++++++++++++++++++++
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # +++++ YEH HAI FINAL PGBOUNCER FIX +++++
-        # Hum driver ko 'asyncpg' se 'psycopg' mein badal rahe hain
+        # Driver ko 'psycopg' par set karna (yeh pichhli baar se sahi hai)
         if database_url.startswith('postgresql://'):
              database_url_mod = database_url.replace('postgresql://', 'postgresql+psycopg://', 1)
         elif database_url.startswith('postgres://'):
             database_url_mod = database_url.replace('postgres://', 'postgresql+psycopg://', 1)
-        # asyncpg waali URL ko bhi badal do agar woh pehle se hai
         elif database_url.startswith('postgresql+asyncpg://'):
             database_url_mod = database_url.replace('postgresql+asyncpg://', 'postgresql+psycopg://', 1)
         else:
@@ -83,24 +83,21 @@ class Database:
 
         self.database_url = database_url_mod
         logger.info("Using 'psycopg' (v3) as the database driver.")
-        # +++++++++++++++++++++++++++++++++++++++++
 
         try:
             self.engine = create_async_engine(
-                self.database_url, # <-- Yeh naya URL hai
+                self.database_url,
                 echo=False,
-                connect_args=connect_args, # SSL ke liye
+                connect_args=connect_args, # <-- Ab yeh 'sslmode' bhejega
                 pool_size=5, 
                 max_overflow=10, 
                 pool_pre_ping=True, 
                 pool_recycle=300, 
                 pool_timeout=10
-                # Saare Pgbouncer hacks (statement_cache_size, compiled_cache) hata diye gaye hain
-                # psycopg ko inki zaroorat nahi hai.
             )
             
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created with psycopg (SSL: {connect_args.get('ssl', 'default')})")
+            logger.info(f"Database engine created with psycopg (SSL: {connect_args.get('sslmode', 'default')})")
         
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine with psycopg: {e}", exc_info=True)
@@ -118,7 +115,6 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False 
         elif isinstance(e, ProgrammingError):
-             # DuplicatePreparedStatementError ab nahi aana chahiye
              logger.error(f"DB Programming Error: {e}", exc_info=True) 
              return False 
         else:
@@ -133,7 +129,6 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
-                    # Yeh query ab fail nahi honi chahiye
                     await conn.execute(text("select pg_catalog.version()"))
                     logger.info("DB connection test successful.")
                     await conn.run_sync(Base.metadata.create_all)
@@ -151,9 +146,6 @@ class Database:
                 else: 
                     logger.critical(f"DB initialization failed after {attempt+1} retries.")
                     raise last_exception
-
-    # --- Baaki saare functions (add_user, get_movie_count, etc.) waise hi rahenge ---
-    # --- Unhein badalne ki zaroorat nahi hai ---
 
     # --- User Methods ---
     async def add_user(self, user_id, username, first_name, last_name):
