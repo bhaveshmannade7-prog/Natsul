@@ -17,8 +17,7 @@ Base = declarative_base()
 
 AUTO_MESSAGE_ID_PLACEHOLDER = 9090909090
 
-# +++++ YEH HAI ASLI FIX +++++
-# Yeh function missing tha, jiski wajah se ImportError aa raha tha
+# +++++ YEH FUNCTION MISSING THA (PICHLE FIX SE) +++++
 def clean_text_for_search(text: str) -> str:
     """Cleans text for searching, matching the SQL logic."""
     if not text:
@@ -41,9 +40,9 @@ def clean_text_for_search(text: str) -> str:
             return " ".join(re.findall(r'\b\w+\b', str(text).lower())).strip()
         except:
             return "" # Return empty if everything fails
-# +++++++++++++++++++++++++++++
+# +++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# ... (clean_text_for_search, User, Movie classes waise hi) ...
+
 class User(Base):
     __tablename__ = 'users'
     user_id = Column(BigInteger, primary_key=True)
@@ -56,7 +55,6 @@ class User(Base):
 
 class Movie(Base):
     __tablename__ = 'movies'
-    # ZAROORI: Aapko yeh column manually add karna hoga agar nahi kiya hai.
     id = Column(Integer, primary_key=True, autoincrement=True)
     imdb_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String, nullable=False)
@@ -80,7 +78,7 @@ class Database:
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # PGBOUNCER FIX (Driver level) - YEH SAHI HAI
+        # PGBOUNCER FIX (Driver level)
         connect_args['statement_cache_size'] = 0
         logger.info("Setting statement_cache_size=0 in connect_args (for asyncpg driver).")
 
@@ -92,30 +90,39 @@ class Database:
         else:
             database_url_mod = database_url
 
-        self.database_url = database_url_mod
+        # +++++ YEH HAI ASLI PGBOUNCER FIX +++++
+        # Hum `statement_cache_size=0` ko seedha URL mein hi add kar denge.
+        # Yeh `connect_args` se zyada strongly kaam karta hai.
+        if '?' in database_url_mod:
+            self.database_url = f"{database_url_mod}&statement_cache_size=0"
+        else:
+            self.database_url = f"{database_url_mod}?statement_cache_size=0"
+        
+        logger.info("Using modified DB URL with statement_cache_size=0")
+        # +++++++++++++++++++++++++++++++++++++++
 
         try:
             self.engine = create_async_engine(
-                self.database_url,
+                self.database_url, # <-- Ab yeh URL fixed hai
                 echo=False,
-                connect_args=connect_args, # <- SAHI FIX YAHAN HAI
+                # connect_args ko rakhein, SSL ke liye zaroori hai
+                connect_args=connect_args, 
                 pool_size=5, 
                 max_overflow=10, 
                 pool_pre_ping=True, 
                 pool_recycle=300, 
                 pool_timeout=10,
-                # PGBOUNCER RUNTIME FIX (SQLAlchemy level)
+                # Yeh abhi bhi zaroori hai SQLAlchemy ke cache ke liye
                 execution_options={"compiled_cache": None} 
             )
             
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0 via connect_args, Compiled Cache: None)")
+            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0 via connect_args/URL, Compiled Cache: None)")
         
         except Exception as e:
             logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
             raise 
 
-    # ... (baaki saare methods _handle_db_error, init_db, add_user, etc. waise hi rahenge) ...
     async def _handle_db_error(self, e: Exception) -> bool:
         """Handle connection errors."""
         if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)):
@@ -128,7 +135,7 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False 
         elif isinstance(e, ProgrammingError):
-             # Yeh error ab sirf tab aana chahiye agar Pgbouncer pool clear nahi hua hai
+             # Pgbouncer error ab yahaan nahi aana chahiye, lekin agar aaye toh...
              logger.error(f"DB Programming Error: {e}", exc_info=True) 
              return False 
         else:
@@ -143,7 +150,7 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
-                    # Yeh query ab fail nahi honi chahiye
+                    # Ab yeh query fail nahi honi chahiye
                     await conn.execute(text("select pg_catalog.version()"))
                     logger.info("DB connection test successful.")
                     await conn.run_sync(Base.metadata.create_all)
@@ -152,8 +159,10 @@ class Database:
             except Exception as e:
                 last_exception = e
                 logger.error(f"DB init failed (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}", exc_info=False)
-                if isinstance(e, ProgrammingError):
-                    logger.critical("DB initialization failed permanently due to ProgrammingError (likely Pgbouncer cache not cleared).")
+                
+                # Agar Pgbouncer error fir bhi aata hai, toh retry mat karo
+                if isinstance(e, ProgrammingError) and "DuplicatePreparedStatementError" in str(e):
+                    logger.critical("DB initialization failed permanently due to ProgrammingError (Pgbouncer cache not cleared despite URL fix).")
                     raise last_exception
                 
                 if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)) and attempt < max_retries - 1:
@@ -162,7 +171,7 @@ class Database:
                     logger.warning(f"Retrying DB initialization in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else: 
-                    logger.critical("DB initialization failed permanently.")
+                    logger.critical(f"DB initialization failed after {attempt+1} retries.")
                     raise last_exception
 
     # --- User Methods ---
@@ -245,16 +254,15 @@ class Database:
     async def get_movie_count(self) -> int:
         try:
             async with self.SessionLocal() as session:
-                # Agar 'id' column nahi hai, toh yeh fail hoga
                 return (await session.execute(select(func.count(Movie.id)))).scalar_one() 
         except ProgrammingError as pe:
              if "column movies.id does not exist" in str(pe):
                  logger.critical("DATABASE SCHEMA ERROR: 'movies' table missing 'id' column! PLEASE RUN: ALTER TABLE movies ADD COLUMN id SERIAL PRIMARY KEY;")
                  return -1
-             else: # Koi aur ProgrammingError (jaise Pgbouncer)
+             else:
                  logger.error(f"get_movie_count ProgrammingError: {pe}", exc_info=False)
-                 await self._handle_db_error(pe) # Yeh False return karega
-                 return -1 # Error state indicate karein
+                 await self._handle_db_error(pe)
+                 return -1 
         except Exception as e:
             logger.error(f"get_movie_count error: {e}", exc_info=False)
             await self._handle_db_error(e)
@@ -276,7 +284,6 @@ class Database:
             async with self.SessionLocal() as session:
                 movie = (await session.execute(select(Movie).where(or_(Movie.imdb_id == imdb_id, Movie.file_id == file_id)))).scalar_one_or_none()
                 
-                # Ab yeh function 'clean_text_for_search' exist karta hai
                 clean_title_val = clean_text_for_search(title) 
                 
                 if movie:
@@ -318,10 +325,8 @@ class Database:
         updated_count, total_count = 0, 0
         try:
             async with self.SessionLocal() as session:
-                # Agar 'id' column nahi hai, toh yeh fail hoga
                 total_count = (await session.execute(select(func.count(Movie.id)))).scalar_one_or_none() or 0
                 if total_count == 0: return (0, 0)
-                # Yeh SQL logic ab 'clean_text_for_search' function se match karti hai
                 update_query = text(r"""UPDATE movies SET clean_title = trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g')) WHERE clean_title IS NULL OR clean_title = '' OR clean_title != trim(regexp_replace(regexp_replace(regexp_replace(lower(title), '[^a-z0-9]', ' ', 'g'), '\y(s|season)\s*\d{1,2}\y', '', 'g'),'\s+', ' ', 'g'));""")
                 result_proxy = await session.execute(update_query)
                 updated_count = result_proxy.rowcount
