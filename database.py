@@ -17,31 +17,22 @@ Base = declarative_base()
 
 AUTO_MESSAGE_ID_PLACEHOLDER = 9090909090
 
-# +++++ YEH FUNCTION MISSING THA (PICHLE FIX SE) +++++
 def clean_text_for_search(text: str) -> str:
     """Cleans text for searching, matching the SQL logic."""
     if not text:
         return ""
     try:
-        # 1. Lowercase
         text = text.lower()
-        # 2. Remove "Season X" patterns (jaise 's1', 'season 02')
         text = re.sub(r'\b(s|season)\s*\d{1,2}\b', '', text)
-        # 3. Replace all non-alphanumeric chars (letters/numbers ke alawa) with a space
         text = re.sub(r'[^a-z0-9]', ' ', text)
-        # 4. Collapse multiple spaces into one
         text = re.sub(r'\s+', ' ', text)
-        # 5. Trim leading/trailing spaces
         return text.strip()
     except Exception as e:
         logger.error(f"Error in clean_text_for_search: {e}", exc_info=False)
-        # Fallback
         try:
             return " ".join(re.findall(r'\b\w+\b', str(text).lower())).strip()
         except:
-            return "" # Return empty if everything fails
-# +++++++++++++++++++++++++++++++++++++++++++++++++++++
-
+            return ""
 
 class User(Base):
     __tablename__ = 'users'
@@ -78,49 +69,41 @@ class Database:
         else:
              logger.info("Internal DB URL: using default SSL.")
 
-        # PGBOUNCER FIX (Driver level)
-        connect_args['statement_cache_size'] = 0
-        logger.info("Setting statement_cache_size=0 in connect_args (for asyncpg driver).")
-
-        # URL modification
+        # +++++ YEH HAI FINAL PGBOUNCER FIX +++++
+        # Hum driver ko 'asyncpg' se 'psycopg' mein badal rahe hain
         if database_url.startswith('postgresql://'):
-             database_url_mod = database_url.replace('postgresql://', 'postgresql+asyncpg://', 1)
+             database_url_mod = database_url.replace('postgresql://', 'postgresql+psycopg://', 1)
         elif database_url.startswith('postgres://'):
-            database_url_mod = database_url.replace('postgres://', 'postgresql+asyncpg://', 1)
+            database_url_mod = database_url.replace('postgres://', 'postgresql+psycopg://', 1)
+        # asyncpg waali URL ko bhi badal do agar woh pehle se hai
+        elif database_url.startswith('postgresql+asyncpg://'):
+            database_url_mod = database_url.replace('postgresql+asyncpg://', 'postgresql+psycopg://', 1)
         else:
             database_url_mod = database_url
 
-        # +++++ YEH HAI ASLI PGBOUNCER FIX +++++
-        # Hum `statement_cache_size=0` ko seedha URL mein hi add kar denge.
-        # Yeh `connect_args` se zyada strongly kaam karta hai.
-        if '?' in database_url_mod:
-            self.database_url = f"{database_url_mod}&statement_cache_size=0"
-        else:
-            self.database_url = f"{database_url_mod}?statement_cache_size=0"
-        
-        logger.info("Using modified DB URL with statement_cache_size=0")
-        # +++++++++++++++++++++++++++++++++++++++
+        self.database_url = database_url_mod
+        logger.info("Using 'psycopg' (v3) as the database driver.")
+        # +++++++++++++++++++++++++++++++++++++++++
 
         try:
             self.engine = create_async_engine(
-                self.database_url, # <-- Ab yeh URL fixed hai
+                self.database_url, # <-- Yeh naya URL hai
                 echo=False,
-                # connect_args ko rakhein, SSL ke liye zaroori hai
-                connect_args=connect_args, 
+                connect_args=connect_args, # SSL ke liye
                 pool_size=5, 
                 max_overflow=10, 
                 pool_pre_ping=True, 
                 pool_recycle=300, 
-                pool_timeout=10,
-                # Yeh abhi bhi zaroori hai SQLAlchemy ke cache ke liye
-                execution_options={"compiled_cache": None} 
+                pool_timeout=10
+                # Saare Pgbouncer hacks (statement_cache_size, compiled_cache) hata diye gaye hain
+                # psycopg ko inki zaroorat nahi hai.
             )
             
             self.SessionLocal = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
-            logger.info(f"Database engine created (SSL: {connect_args.get('ssl', 'default')}, Stmt Cache: 0 via connect_args/URL, Compiled Cache: None)")
+            logger.info(f"Database engine created with psycopg (SSL: {connect_args.get('ssl', 'default')})")
         
         except Exception as e:
-            logger.critical(f"Failed to create SQLAlchemy engine: {e}", exc_info=True)
+            logger.critical(f"Failed to create SQLAlchemy engine with psycopg: {e}", exc_info=True)
             raise 
 
     async def _handle_db_error(self, e: Exception) -> bool:
@@ -135,7 +118,7 @@ class Database:
                  logger.critical(f"Failed to dispose DB engine pool: {re_e}", exc_info=True)
                  return False 
         elif isinstance(e, ProgrammingError):
-             # Pgbouncer error ab yahaan nahi aana chahiye, lekin agar aaye toh...
+             # DuplicatePreparedStatementError ab nahi aana chahiye
              logger.error(f"DB Programming Error: {e}", exc_info=True) 
              return False 
         else:
@@ -150,7 +133,7 @@ class Database:
             try:
                 logger.info(f"Attempting DB initialization (attempt {attempt+1}/{max_retries})...")
                 async with self.engine.begin() as conn:
-                    # Ab yeh query fail nahi honi chahiye
+                    # Yeh query ab fail nahi honi chahiye
                     await conn.execute(text("select pg_catalog.version()"))
                     logger.info("DB connection test successful.")
                     await conn.run_sync(Base.metadata.create_all)
@@ -160,11 +143,6 @@ class Database:
                 last_exception = e
                 logger.error(f"DB init failed (attempt {attempt+1}/{max_retries}): {type(e).__name__} - {e}", exc_info=False)
                 
-                # Agar Pgbouncer error fir bhi aata hai, toh retry mat karo
-                if isinstance(e, ProgrammingError) and "DuplicatePreparedStatementError" in str(e):
-                    logger.critical("DB initialization failed permanently due to ProgrammingError (Pgbouncer cache not cleared despite URL fix).")
-                    raise last_exception
-                
                 if isinstance(e, (OperationalError, DisconnectionError, ConnectionRefusedError, asyncio.TimeoutError)) and attempt < max_retries - 1:
                     await self._handle_db_error(e) 
                     wait_time = 2 ** attempt
@@ -173,6 +151,9 @@ class Database:
                 else: 
                     logger.critical(f"DB initialization failed after {attempt+1} retries.")
                     raise last_exception
+
+    # --- Baaki saare functions (add_user, get_movie_count, etc.) waise hi rahenge ---
+    # --- Unhein badalne ki zaroorat nahi hai ---
 
     # --- User Methods ---
     async def add_user(self, user_id, username, first_name, last_name):
