@@ -41,16 +41,15 @@ async def initialize_algolia():
 
     logger.info("Attempting to initialize Algolia client (v4+)...")
     try:
-        # Client 'SearchClient(...)' se banta hai (bina .create)
+        # Client 'SearchClient(...)' se banta hai
         client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         
-        # --- YEH HAI ASLI FINAL FIX ---
-        # Aapke logs ne confirm kar diya hai ki 'init_index' GALAT hai.
-        # Sahi command 'client.index()' hi hai.
-        index = client.index(ALGOLIA_INDEX_NAME) 
-        # ----------------------------
+        # --- YEH HAI ASLI FIX ---
+        # Method ka naam 'init_index' hai, 'index' nahi
+        index = client.init_index(ALGOLIA_INDEX_NAME) 
+        # ---
         
-        logger.info(f"Algolia client.index initialized for: {ALGOLIA_INDEX_NAME}")
+        logger.info(f"Algolia client and index initialized for: {ALGOLIA_INDEX_NAME}")
 
         # Check connection and apply settings
         logger.info("Fetching/Applying Algolia index settings...")
@@ -60,7 +59,6 @@ async def initialize_algolia():
             'queryType': 'prefixLast', 'attributesForFaceting': ['searchable(year)'],
             'typoTolerance': 'min', 'removeStopWords': True, 'ignorePlurals': True,
         }
-        # Async methods use karein
         await index.set_settings_async(settings_to_apply, request_options={'timeout': 20}) 
         await index.get_settings_async(request_options={'timeout': 15}) 
         logger.info("Applied settings using async methods.")
@@ -96,7 +94,8 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
     try:
         results = await index.search_async(query, {'hitsPerPage': limit})
         hits = results.get('hits', [])
-        return [{'imdb_id': hit['objectID'], 'title': hit.get('title', 'N/A')} for hit in hits if 'objectID' in hit]
+        # FIX: Ensure title is present, provide fallback
+        return [{'imdb_id': hit['objectID'], 'title': hit.get('title') or 'Title Missing', 'year': hit.get('year')} for hit in hits if 'objectID' in hit]
     except Exception as e: logger.error(f"Algolia search failed for '{query}': {e}", exc_info=True); return []
 
 async def algolia_add_movie(movie_data: dict) -> bool:
