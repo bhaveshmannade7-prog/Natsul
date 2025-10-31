@@ -44,17 +44,17 @@ async def initialize_algolia():
         
         logger.info(f"Algolia Async client initialized.")
 
-        # --- FIX: Aggressive Typo-Tolerance Settings ---
-        # Yeh settings har baar bot start hone par apply hongi
+        # --- YEH FIX AAPKE LIYE ZAROORI HAI ---
+        # Yeh settings 'ktra' -> 'kantara' jaise typos ko handle karti hain
         settings_to_apply = {
             # `clean_title` ko #1 priority dein (typo matching ke liye)
             'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year'], 
             'hitsPerPage': 20,
             
             # Aggressive Typo-Tolerance (taaki "ktra" -> "kantara" match ho)
-            'typoTolerance': 'true', 
-            'minWordSizefor1Typo': 2, 
-            'minWordSizefor2Typos': 4, 
+            'typoTolerance': 'true', # Typo tolerance enable karein
+            'minWordSizefor1Typo': 2, # 2 अक्षर ke word mein 1 typo allow karein
+            'minWordSizefor2Typos': 4, # 4 अक्षर (jaise 'ktra') mein 2 typos allow karein
             
             'queryType': 'prefixLast',
             'attributesForFaceting': ['searchable(year)'],
@@ -67,7 +67,7 @@ async def initialize_algolia():
             index_name=ALGOLIA_INDEX_NAME,
             index_settings=settings_to_apply
         )
-        logger.info(f"Algolia settings applied for index '{ALGOLIA_INDEX_NAME}'.")
+        logger.info(f"Algolia settings applied for index '{ALGOLIA_INDEX_NAME}'. Typo-tolerance is active.")
 
         _is_ready = True
         logger.info("Algolia initialization and settings apply successful.")
@@ -107,11 +107,13 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
             }
         )
         
-        # --- FIX for algoliasearch v4 (AttributeError Fix) ---
-        # `result.results[0]` ek dict-like object hai. Use .hits nahi, ['hits'] se access karein.
+        # --- YEH BHI EK ZAROORI FIX HAI ---
+        # algoliasearch v4 mein search result access karne ka sahi tareeka
         hits = []
         if result.results and len(result.results) > 0 and 'hits' in result.results[0]:
             hits = result.results[0]['hits']
+        else:
+            logger.warning(f"Algolia search for '{query}' returned no hits or unexpected format.")
         # --- END FIX ---
 
         return [
@@ -231,12 +233,15 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
         return await algolia_clear_index(), 0
     try:
         logger.info(f"Sync: Replacing Algolia index with {count:,} objects...")
-        await algolia_clear_index()
+        # Pehle index clear karein
+        await client.clear_objects(index_name=ALGOLIA_INDEX_NAME)
+        logger.info("Algolia index cleared, now saving new objects...")
+        # Phir naye objects save karein
         await client.save_objects(
             index_name=ALGOLIA_INDEX_NAME,
             objects=valid_movies
         )
-        logger.info(f"Sync completed.")
+        logger.info(f"Sync completed. {count} objects saved.")
         return True, count
     except Exception as e:
         logger.error(f"Algolia sync failed: {e}", exc_info=True)
