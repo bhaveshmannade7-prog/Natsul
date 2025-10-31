@@ -97,15 +97,34 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         logger.error("Algolia not ready for search.")
         return []
     try:
+        
+        # --- FIX: YAHAN PAR PROBLEM THI ---
+        # `client.search` method `requests` naam ka parameter leta hai.
+        # Aapne ise `search_method_params` ke andar wrap kar diya tha, 
+        # jiski wajah se Algolia ko search query nahi mil rahi thi aur 
+        # hamesha empty result aa raha tha.
+        
+        # ❌ Galat Code (Purana):
+        # result = await client.search(
+        #     search_method_params={
+        #         "requests": [{
+        #             "indexName": ALGOLIA_INDEX_NAME,
+        #             "query": query,
+        #             "hitsPerPage": limit
+        #         }]
+        #     }
+        # )
+        
+        # ✅ Sahi Code (Fix):
         result = await client.search(
-            search_method_params={
-                "requests": [{
-                    "indexName": ALGOLIA_INDEX_NAME,
-                    "query": query,
-                    "hitsPerPage": limit
-                }]
-            }
+            requests=[{
+                "indexName": ALGOLIA_INDEX_NAME,
+                "query": query,
+                "hitsPerPage": limit
+            }]
         )
+        # --- END FIX ---
+        
         
         # --- FIX for algoliasearch v4 (AttributeError Fix) ---
         # `result.results[0]` ek dict-like object hai. Use .hits nahi, ['hits'] se access karein.
