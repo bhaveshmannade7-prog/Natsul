@@ -2,7 +2,7 @@
 import logging
 import re
 import asyncio
-from datetime import datetime, timedelta, timezone # timezone import karein
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Tuple, Any, Literal
 from motor.motor_asyncio import AsyncIOMotorClient
 import pymongo
@@ -11,8 +11,15 @@ import certifi # SSL Fix ke liye import karein
 
 logger = logging.getLogger("bot.database")
 
-# clean_text_for_search function ab bot.py mein hai
-# AUTO_MESSAGE_ID_PLACEHOLDER ab bot.py mein hai
+# Helper function (fallback ke liye)
+def clean_text_for_search(text: str) -> str:
+    """Cleans text for search indexing."""
+    if not text: return ""
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s]+", " ", text)
+    text = re.sub(r"\b(s|season)\s*\d{1,2}\b", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 class Database:
     def __init__(self, database_url: str):
@@ -372,18 +379,23 @@ class Database:
         # FIX: Check using 'is None'
         if self.movies is None: await self._connect()
         try:
+            # --- FIX: `clean_title` ko bhi sync ke liye fetch karein ---
             cursor = self.movies.find(
                 {},
-                {"imdb_id": 1, "title": 1, "year": 1, "_id": 0} # Projection
+                {"imdb_id": 1, "title": 1, "year": 1, "clean_title": 1, "_id": 0} # Projection updated
             )
             movies = []
             async for m in cursor:
+                title = m.get("title", "N/A")
                 movies.append({
                     'objectID': m["imdb_id"], # Required by Algolia
                     'imdb_id': m["imdb_id"],
-                    'title': m.get("title", "N/A"),
-                    'year': m.get("year")
+                    'title': title,
+                    'year': m.get("year"),
+                    # `clean_title` ko add karein, agar DB mein na ho to generate karein
+                    'clean_title': m.get("clean_title", clean_text_for_search(title)) 
                 })
+            # --- END FIX ---
             return movies
         except Exception as e:
             logger.error(f"get_all_movies_for_sync error: {e}", exc_info=False)
@@ -408,5 +420,5 @@ class Database:
             return movies
         except Exception as e:
             logger.error(f"export_movies error: {e}", exc_info=False)
-            await self.G(e)
+            await self._handle_db_error(e)
             return []
