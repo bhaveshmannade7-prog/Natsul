@@ -7,7 +7,7 @@ import io
 import signal
 import json
 import hashlib
-from datetime import datetime, timezone # timezone import karein
+from datetime import datetime, timezone # <--- FIX: `timezone` import karein
 from contextlib import asynccontextmanager
 from typing import List, Dict
 from functools import wraps
@@ -150,7 +150,8 @@ except Exception as e:
     raise SystemExit("Database object creation failed.")
 
 
-start_time = datetime.now(timezone.utc) # FIX: Use timezone-aware datetime
+# --- FIX: DeprecationWarning ke liye `datetime.now(timezone.utc)` use karein ---
+start_time = datetime.now(timezone.utc)
 
 # Declare global vars for tasks/executor to be accessible in shutdown
 monitor_task = None
@@ -280,7 +281,8 @@ class AdminFilter(BaseFilter):
         return message.from_user and (message.from_user.id == ADMIN_USER_ID)
 
 def get_uptime() -> str:
-    delta = datetime.now(timezone.utc) - start_time; total_seconds = int(delta.total_seconds()) # FIX: Use timezone-aware datetime
+    # FIX: Use timezone-aware datetime
+    delta = datetime.now(timezone.utc) - start_time; total_seconds = int(delta.total_seconds())
     days, r = divmod(total_seconds, 86400); hours, r = divmod(r, 3600); minutes, seconds = divmod(r, 60)
     if days > 0: return f"{days}d{hours}h{minutes}m"
     if hours > 0: return f"{hours}h{minutes}m"
@@ -563,7 +565,7 @@ async def start_command(message: types.Message):
             f"/add_movie (Reply: `imdb|title|year`)\n"
             f"/remove_dead_movie `IMDB_ID`\n"
             f"<b>/sync_algolia</b> ⚠️ (Full DB->Algolia)\n"
-            f"/rebuild_index (DB Only - Mongo)\n"
+            f"<b>/rebuild_index</b> (DB Only - Mongo)\n"
             f"/cleanup_users (Inactive >30d)\n"
             f"/export_csv `users|movies` `[limit]`\n"
             f"/set_limit `N` (5-200)"
@@ -864,7 +866,7 @@ async def add_movie_command(message: types.Message):
     db_map = {True: "✅ Added DB.", "updated": "✅ Updated DB.", "duplicate": "⚠️ Duplicate DB.", False: "❌ DB Error."}; db_stat = db_map.get(db_res, "❌ DB Error.")
     ag_stat = ""
     if db_res in [True, "updated"]: # Only sync if added or updated in DB
-        ag_data = {'objectID': imdb_id, 'imdb_id': imdb_id, 'title': title, 'year': year}
+        ag_data = {'objectID': imdb_id, 'imdb_id': imdb_id, 'title': title, 'year': year, 'clean_title': clean_title_val} # FIX: clean_title add karein
         ag_res = await algolia_add_movie(ag_data)
         ag_stat = "✅ Algolia Synced." if ag_res else "❌ Algolia Sync FAIL!"
     elif db_res == "duplicate":
@@ -907,12 +909,15 @@ async def import_json_command(message: types.Message):
             fid = item.get("file_id")
             fname = item.get("title") # Use 'title' field as per image
             
+            # --- FIX: file_id integer ho sakta hai ---
             if not fid or not fname: 
                 s += 1; continue # Skip if no file_id or title
             
+            fid_str = str(fid) # file_id ko hamesha string banayein
+            # --- END FIX ---
+
             # 2. Generate our own IMDB ID based on file_id, ignore JSON's imdb_id
-            # FIX: Cast fid to string, as it might be an integer in the JSON
-            imdb = f"json_{hashlib.md5(str(fid).encode()).hexdigest()[:10]}" # Shorten hash
+            imdb = f"json_{hashlib.md5(fid_str.encode()).hexdigest()[:10]}" # Shorten hash
             
             # 3. Get message_id and channel_id from JSON
             message_id = item.get("message_id") or AUTO_MESSAGE_ID_PLACEHOLDER
@@ -930,10 +935,10 @@ async def import_json_command(message: types.Message):
             # === END OF MODIFICATION ===
             
             # Call DB add/update
-            db_res = await safe_db_call(db.add_movie(imdb, title, year, fid, message_id, channel_id, clean_title_val))
+            db_res = await safe_db_call(db.add_movie(imdb, title, year, fid_str, message_id, channel_id, clean_title_val))
             
             # Prepare data for Algolia batch
-            ag_data = {'objectID': imdb, 'imdb_id': imdb, 'title': title, 'year': year}
+            ag_data = {'objectID': imdb, 'imdb_id': imdb, 'title': title, 'year': year, 'clean_title': clean_title_val} # FIX: clean_title add karein
             if db_res is True: a += 1; ag_batch.append(ag_data)
             elif db_res == "updated": u += 1; ag_batch.append(ag_data)
             elif db_res == "duplicate": s += 1
@@ -973,7 +978,7 @@ async def remove_dead_movie_command(message: types.Message):
     db_stat = f"✅ DB Removed '{movie['title'] if movie else imdb_id}'." if db_del else ("ℹ️ DB Not found." if not movie else "❌ DB Error removing.")
     
     # Always attempt Algolia delete
-    ag_del = await algolia_remove_movie(imdb_id) # Returns True/False
+    ag_del = await algolia_remove_movie(imdb_id) # Returns True/False/None
     ag_stat = "✅ Algolia Removed." if ag_del else "ℹ️ Algolia Not Found or Error."
     
     txt = f"{db_stat}\n{ag_stat}";
@@ -1102,7 +1107,7 @@ async def auto_index_handler(message: types.Message):
         status = 'Added' if db_res is True else 'Updated'
         logger.info(f"{log_prefix} DB {status}.")
         # Prepare data and sync to Algolia
-        algolia_data = {'objectID': imdb_id, 'imdb_id': imdb_id, 'title': title, 'year': year}
+        algolia_data = {'objectID': imdb_id, 'imdb_id': imdb_id, 'title': title, 'year': year, 'clean_title': clean_title_val} # FIX: clean_title add karein
         ag_ok = await algolia_add_movie(algolia_data) # Use the wrapper
         logger.info(f"{log_prefix} Algolia Sync {'OK' if ag_ok else 'FAILED'}.")
     elif db_res == "duplicate":
@@ -1142,14 +1147,6 @@ async def errors_handler(update: types.Update, exception: Exception):
 # This part won't run on Render with Uvicorn typically
 async def main():
     logger.info("Bot starting in polling mode (for local testing)...")
-    
-    # Delete webhook before polling to avoid conflicts
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook deleted for local polling.")
-    except Exception as e:
-        logger.error(f"Could not delete webhook: {e}")
-
     # Initialize DB and Algolia explicitly if not using FastAPI lifespan
     try:
         await db.init_db()
