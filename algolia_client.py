@@ -98,29 +98,29 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         return []
     try:
         
-        # --- FIX: YAHAN PAR PROBLEM THI ---
-        # Sahi function `client.search` hi hai.
-        # Lekin `requests` list ko *bina naam ke* (positionally) pass karna hai.
+        # --- FINAL FIX: YAHAN PAR PROBLEM THI ---
+        # API ko ek 'list' `[{...}]` nahi,
+        # balki ek 'object' `{"requests": [{...}]}` chahiye.
         
-        # ❌ Galat Code (Jo TypeError de raha tha):
+        # ❌ Galat Code (Jo 'Expecting an object' error de raha tha):
         # result = await client.search(
-        #     requests=[{ ... }] 
+        #     [{
+        #         "indexName": ALGOLIA_INDEX_NAME,
+        #         "query": query,
+        #         "hitsPerPage": limit
+        #     }]
         # )
         
-        # ❌ Galat Code (Jo AttributeError de raha tha):
-        # result = await client.search_multiple_queries(
-        #     requests=[{ ... }]
-        # )
-        
-        # ✅ Sahi Code (Asli Fix):
-        # `requests` list ko pehle argument ki tarah pass karein
-        result = await client.search(
-            [{
+        # ✅ Sahi Code (Asli Final Fix):
+        # List ko ek dictionary ke andar 'requests' key mein wrap karein
+        search_body = {
+            "requests": [{
                 "indexName": ALGOLIA_INDEX_NAME,
                 "query": query,
                 "hitsPerPage": limit
             }]
-        )
+        }
+        result = await client.search(search_body)
         # --- END FIX ---
         
         
