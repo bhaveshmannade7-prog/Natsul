@@ -99,10 +99,18 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
                 }]
             }
         )
-        hits = result.get('results', [{}])[0].get('hits', [])
+        
+        # --- FIX for algoliasearch v4 ---
+        # The result is a SearchResponses object, not a dict
+        # Access hits via attributes: result.results[0].hits
+        hits = []
+        if result.results and len(result.results) > 0 and result.results[0].hits:
+            hits = result.results[0].hits
+        # --- END FIX ---
+
         return [
             {
-                'imdb_id': hit['objectID'],
+                'imdb_id': hit['objectID'], # 'hit' is a dict, so this is correct
                 'title': hit.get('title') or 'Title Missing',
                 'year': hit.get('year')
             }
