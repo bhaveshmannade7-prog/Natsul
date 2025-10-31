@@ -44,23 +44,28 @@ async def initialize_algolia():
         
         logger.info(f"Algolia Async client initialized for: {ALGOLIA_INDEX_NAME}")
 
+        # --- FIX: Aggressive Typo-Tolerance Settings ---
         settings_to_apply = {
-            'minWordSizefor1Typo': 3,
-            'minWordSizefor2Typos': 7,
+            'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year'], # clean_title ko pehle rakhein
             'hitsPerPage': 20,
-            'searchableAttributes': ['title', 'imdb_id', 'year'],
+            
+            # Aggressive Typo-Tolerance
+            'typoTolerance': 'true', # Sabhi queries par typos allow karein
+            'minWordSizefor1Typo': 2, # 2-letter words par 1 typo
+            'minWordSizefor2Typos': 4, # 4-letter words par 2 typos ("ktra" yahan match hoga)
+            
             'queryType': 'prefixLast',
             'attributesForFaceting': ['searchable(year)'],
-            'typoTolerance': 'min',
             'removeStopWords': True,
             'ignorePlurals': True,
         }
+        # --- END FIX ---
         
         await client.set_settings(
             index_name=ALGOLIA_INDEX_NAME,
             index_settings=settings_to_apply
         )
-        logger.info("Applied settings using async methods.")
+        logger.info(f"Applied settings (with aggressive typo-tolerance) using async methods.")
 
         _is_ready = True
         logger.info("Algolia initialization and settings apply successful.")
@@ -100,12 +105,11 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
             }
         )
         
-        # --- FIX for algoliasearch v4 ---
-        # The result is a SearchResponses object, not a dict
-        # Access hits via attributes: result.results[0].hits
+        # --- FIX for algoliasearch v4 (AttributeError Fix) ---
+        # `result.results[0]` ek dict-like object hai. Use .hits nahi, ['hits'] se access karein.
         hits = []
-        if result.results and len(result.results) > 0 and result.results[0].hits:
-            hits = result.results[0].hits
+        if result.results and len(result.results) > 0 and 'hits' in result.results[0]:
+            hits = result.results[0]['hits']
         # --- END FIX ---
 
         return [
