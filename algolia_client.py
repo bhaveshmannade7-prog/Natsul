@@ -44,14 +44,20 @@ async def initialize_algolia():
         
         logger.info(f"Algolia Async client initialized.")
 
-        # --- FIX: Aggressive Typo-Tolerance Settings ---
-        # Yeh settings har baar bot start hone par apply hongi
+        # --- FIX: Searchable Attributes ka order badla gaya ---
+        # `title` ko pehle rakha gaya hai taaki "Kantara" jaise exact match hamesha kaam karein.
+        # `clean_title` ko doosre number par rakha gaya hai taaki "Ktra" jaise typo match kaam karein.
+        
         settings_to_apply = {
-            # `clean_title` ko #1 priority dein (typo matching ke liye)
-            'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year'], 
+            # ❌ Purana Code:
+            # 'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year'], 
+            
+            # ✅ Naya Code:
+            'searchableAttributes': ['title', 'clean_title', 'imdb_id', 'year'], 
+            
             'hitsPerPage': 20,
             
-            # Aggressive Typo-Tolerance (taaki "ktra" -> "kantara" match ho)
+            # Aggressive Typo-Tolerance
             'typoTolerance': 'true', 
             'minWordSizefor1Typo': 2, 
             'minWordSizefor2Typos': 4, 
@@ -98,21 +104,7 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         return []
     try:
         
-        # --- FINAL FIX: YAHAN PAR PROBLEM THI ---
-        # API ko ek 'list' `[{...}]` nahi,
-        # balki ek 'object' `{"requests": [{...}]}` chahiye.
-        
-        # ❌ Galat Code (Jo 'Expecting an object' error de raha tha):
-        # result = await client.search(
-        #     [{
-        #         "indexName": ALGOLIA_INDEX_NAME,
-        #         "query": query,
-        #         "hitsPerPage": limit
-        #     }]
-        # )
-        
-        # ✅ Sahi Code (Asli Final Fix):
-        # List ko ek dictionary ke andar 'requests' key mein wrap karein
+        # --- FINAL FIX (Yeh code ab sahi hai) ---
         search_body = {
             "requests": [{
                 "indexName": ALGOLIA_INDEX_NAME,
