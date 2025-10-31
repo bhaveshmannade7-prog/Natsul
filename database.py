@@ -379,21 +379,31 @@ class Database:
         # FIX: Check using 'is None'
         if self.movies is None: await self._connect()
         try:
-            # --- FIX: `clean_title` ko bhi sync ke liye fetch karein ---
+            # --- FIX: `clean_title` ko fetch nahi karna, balki generate karna hai ---
             cursor = self.movies.find(
                 {},
-                {"imdb_id": 1, "title": 1, "year": 1, "clean_title": 1, "_id": 0} # Projection updated
+                {"imdb_id": 1, "title": 1, "year": 1, "_id": 0} # Projection (clean_title hata diya)
             )
             movies = []
             async for m in cursor:
                 title = m.get("title", "N/A")
+                
+                # --- FINAL FIX: Hamesha title se clean_title generate karein ---
+                # Purana code DB ke clean_title par bharosa kar raha tha, jo 'null' ho sakta hai.
+                # Yeh naya code hamesha 'title' field se 'clean_title' banayega.
+                
+                # ❌ Purana Code:
+                # 'clean_title': m.get("clean_title") or clean_text_for_search(title) 
+                
+                # ✅ Naya Code:
+                new_clean_title = clean_text_for_search(title)
+                
                 movies.append({
                     'objectID': m["imdb_id"], # Required by Algolia
                     'imdb_id': m["imdb_id"],
                     'title': title,
                     'year': m.get("year"),
-                    # `clean_title` ko add karein, agar DB mein na ho to generate karein
-                    'clean_title': m.get("clean_title") or clean_text_for_search(title) # <--- FIX: `None` ke liye fallback
+                    'clean_title': new_clean_title # Hamesha naya wala use karein
                 })
             # --- END FIX ---
             return movies
