@@ -99,21 +99,23 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
     try:
         
         # --- FIX: YAHAN PAR PROBLEM THI ---
-        # Pichhli baar maine `client.search` likha chhod diya tha.
-        # `requests` parameter ke liye sahi function `client.search_multiple_queries` hai.
+        # Sahi function `client.search` hi hai.
+        # Lekin `requests` list ko *bina naam ke* (positionally) pass karna hai.
         
-        # ❌ Galat Code (Jo error de raha tha):
+        # ❌ Galat Code (Jo TypeError de raha tha):
         # result = await client.search(
-        #     requests=[{
-        #         "indexName": ALGOLIA_INDEX_NAME,
-        #         "query": query,
-        #         "hitsPerPage": limit
-        #     }]
+        #     requests=[{ ... }] 
+        # )
+        
+        # ❌ Galat Code (Jo AttributeError de raha tha):
+        # result = await client.search_multiple_queries(
+        #     requests=[{ ... }]
         # )
         
         # ✅ Sahi Code (Asli Fix):
-        result = await client.search_multiple_queries(
-            requests=[{
+        # `requests` list ko pehle argument ki tarah pass karein
+        result = await client.search(
+            [{
                 "indexName": ALGOLIA_INDEX_NAME,
                 "query": query,
                 "hitsPerPage": limit
