@@ -99,24 +99,20 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
     try:
         
         # --- FIX: YAHAN PAR PROBLEM THI ---
-        # `client.search` method `requests` naam ka parameter leta hai.
-        # Aapne ise `search_method_params` ke andar wrap kar diya tha, 
-        # jiski wajah se Algolia ko search query nahi mil rahi thi aur 
-        # hamesha empty result aa raha tha.
+        # Pichhli baar maine `client.search` likha chhod diya tha.
+        # `requests` parameter ke liye sahi function `client.search_multiple_queries` hai.
         
-        # ❌ Galat Code (Purana):
+        # ❌ Galat Code (Jo error de raha tha):
         # result = await client.search(
-        #     search_method_params={
-        #         "requests": [{
-        #             "indexName": ALGOLIA_INDEX_NAME,
-        #             "query": query,
-        #             "hitsPerPage": limit
-        #         }]
-        #     }
+        #     requests=[{
+        #         "indexName": ALGOLIA_INDEX_NAME,
+        #         "query": query,
+        #         "hitsPerPage": limit
+        #     }]
         # )
         
-        # ✅ Sahi Code (Fix):
-        result = await client.search(
+        # ✅ Sahi Code (Asli Fix):
+        result = await client.search_multiple_queries(
             requests=[{
                 "indexName": ALGOLIA_INDEX_NAME,
                 "query": query,
