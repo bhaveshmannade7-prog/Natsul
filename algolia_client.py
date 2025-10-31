@@ -38,21 +38,23 @@ async def initialize_algolia():
         _is_ready = False
         return False
 
-    logger.info("Attempting to initialize Algolia client (v4 Async)...")
+    logger.info(f"Attempting to initialize Algolia client (v4 Async) for index: {ALGOLIA_INDEX_NAME}")
     try:
         client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         
-        logger.info(f"Algolia Async client initialized for: {ALGOLIA_INDEX_NAME}")
+        logger.info(f"Algolia Async client initialized.")
 
         # --- FIX: Aggressive Typo-Tolerance Settings ---
+        # Yeh settings har baar bot start hone par apply hongi
         settings_to_apply = {
-            'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year'], # clean_title ko pehle rakhein
+            # `clean_title` ko #1 priority dein (typo matching ke liye)
+            'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year'], 
             'hitsPerPage': 20,
             
-            # Aggressive Typo-Tolerance
-            'typoTolerance': 'true', # Sabhi queries par typos allow karein
-            'minWordSizefor1Typo': 2, # 2-letter words par 1 typo
-            'minWordSizefor2Typos': 4, # 4-letter words par 2 typos ("ktra" yahan match hoga)
+            # Aggressive Typo-Tolerance (taaki "ktra" -> "kantara" match ho)
+            'typoTolerance': 'true', 
+            'minWordSizefor1Typo': 2, 
+            'minWordSizefor2Typos': 4, 
             
             'queryType': 'prefixLast',
             'attributesForFaceting': ['searchable(year)'],
@@ -65,7 +67,7 @@ async def initialize_algolia():
             index_name=ALGOLIA_INDEX_NAME,
             index_settings=settings_to_apply
         )
-        logger.info(f"Applied settings (with aggressive typo-tolerance) using async methods.")
+        logger.info(f"Algolia settings applied for index '{ALGOLIA_INDEX_NAME}'.")
 
         _is_ready = True
         logger.info("Algolia initialization and settings apply successful.")
