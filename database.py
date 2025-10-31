@@ -2,7 +2,7 @@
 import logging
 import re
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone # <--- FIX: `timezone` import karein
 from typing import List, Dict, Tuple, Any, Literal
 from motor.motor_asyncio import AsyncIOMotorClient
 import pymongo
@@ -393,7 +393,7 @@ class Database:
                     'title': title,
                     'year': m.get("year"),
                     # `clean_title` ko add karein, agar DB mein na ho to generate karein
-                    'clean_title': m.get("clean_title", clean_text_for_search(title)) 
+                    'clean_title': m.get("clean_title") or clean_text_for_search(title) # <--- FIX: `None` ke liye fallback
                 })
             # --- END FIX ---
             return movies
