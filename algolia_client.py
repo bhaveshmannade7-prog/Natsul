@@ -2,13 +2,12 @@
 
 import os
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any # Any import kiya hai
 import algoliasearch
 
 from algoliasearch.search.client import SearchClient
-# --- FIX: Corrected import path for SearchIndex in Algolia v4 ---
-# 'index' se nahi, 'search_index' module se import karein
-from algoliasearch.search.search_index import SearchIndex 
+# FIX: ModuleNotFoundError se bachne ke liye SearchIndex ka direct import hata diya
+# from algoliasearch.search.search_index import SearchIndex 
 from dotenv import load_dotenv
 import asyncio
 
@@ -27,7 +26,8 @@ ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME")
 
 # Variable names ko clear kiya (search_client, index)
 search_client: SearchClient | None = None
-index: SearchIndex | None = None 
+# FIX: Type hint ko Any kar diya taaki import error na aaye
+index: Any | None = None 
 _is_ready = False
 
 async def initialize_algolia():
@@ -48,8 +48,7 @@ async def initialize_algolia():
         search_client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         logger.info(f"Algolia Async client initialized.")
         
-        # 2. Index object ko initialize karein (yeh recommended tareeka hai)
-        # init_index method SearchIndex object return karta hai
+        # 2. Index object ko initialize karein (yeh runtime mein sahi object return karega)
         index = search_client.init_index(ALGOLIA_INDEX_NAME)
 
         # --- Aggressive Typo-Tolerance Settings ---
