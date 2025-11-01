@@ -22,7 +22,6 @@ ALGOLIA_APP_ID = os.getenv("ALGOLIA_APP_ID")
 ALGOLIA_ADMIN_KEY = os.getenv("ALGOLIA_ADMIN_KEY")
 ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME")
 
-# FIX: Index object ka creation aur reference hata diya, sirf client ka istemal hoga
 client: SearchClient | None = None 
 _is_ready = False
 
@@ -45,7 +44,8 @@ async def initialize_algolia():
 
         # Settings apply using the client object directly (pass index_name)
         settings_to_apply = {
-            'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year'], 
+            # Fix 1: Sabse important hai ki saare attributes searchable ho
+            'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year', 'unordered(title)', 'unordered(clean_title)'], 
             'hitsPerPage': 20,
             
             # Aggressive Typo-Tolerance
@@ -53,7 +53,9 @@ async def initialize_algolia():
             'minWordSizefor1Typo': 2, 
             'minWordSizefor2Typos': 4, 
             
-            'queryType': 'prefixLast',
+            # Agar user ne do shabd diye hain, to dono ko match karne ki koshish karein
+            'queryType': 'prefixLast', 
+            
             'attributesForFaceting': ['searchable(year)'],
             'removeStopWords': True,
             'ignorePlurals': True,
@@ -71,7 +73,6 @@ async def initialize_algolia():
         return True
 
     except Exception as e:
-        # Yeh error handle karega jab client.set_settings fail ho ya koi aur dikkat ho
         logger.critical(f"Failed to initialize Algolia client ya settings apply karne mein: {e}", exc_info=True)
         client = None
         _is_ready = False
@@ -89,21 +90,24 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         logger.error("Algolia search ke liye taiyar nahi hai.")
         return []
     try:
-        # FIX: Client ka direct search method use karein (AttributeError se bachne ke liye)
-        result = await client.search(
-            search_method_params={
-                "requests": [{
-                    "indexName": ALGOLIA_INDEX_NAME, # Index name yahan pass karein
-                    "query": query,
-                    "hitsPerPage": limit
-                }]
-            }
-        )
+        # FIX 2: Single search request ko wrap karne ki bajaye, client.search ka upyog karein
+        # yeh zyada reliable hai
+        search_request = {
+            "indexName": ALGOLIA_INDEX_NAME, # Index name yahan pass karein
+            "query": query,
+            "hitsPerPage": limit,
+            "restrictSearchableAttributes": ['clean_title', 'title', 'year', 'imdb_id'] # Search ko in fields tak simit rakhein
+        }
         
-        # CRITICAL FIX (Original issue ki wajah): Hits ko sahi tarike se extract karein
+        # client.search method ka upyog karein
+        result = await client.search([search_request])
+        
+        # CRITICAL FIX: Hits ko sahi tarike se extract karein
         hits = []
         if result.results and len(result.results) > 0 and 'hits' in result.results[0]:
             hits = result.results[0]['hits']
+        
+        logger.info(f"Algolia returned {len(hits)} hits for query: '{query}'") # CRITICAL DIAGNOSTIC
         # END CRITICAL FIX
 
         return [
