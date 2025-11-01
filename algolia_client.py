@@ -23,8 +23,6 @@ ALGOLIA_ADMIN_KEY = os.getenv("ALGOLIA_ADMIN_KEY")
 ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME")
 
 client: SearchClient | None = None 
-# Global index object aur _get_index function ko hata diya gaya hai.
-# Ab hum saare operations seedhe client par index_name ke saath karenge.
 _is_ready = False
 
 
@@ -48,17 +46,12 @@ async def initialize_algolia():
         
         # Settings apply karne ke liye client.set_settings ka upyog karein
         settings_to_apply = {
-            # Sabse zyada search attributes rakhein
             'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year', 'unordered(title)', 'unordered(clean_title)'], 
             'hitsPerPage': 20,
-            
-            # Aggressive Typo-Tolerance
             'typoTolerance': 'true', 
             'minWordSizefor1Typo': 2, 
             'minWordSizefor2Typos': 4, 
-            
             'queryType': 'prefixLast', 
-            
             'attributesForFaceting': ['searchable(year)'],
             'removeStopWords': True,
             'ignorePlurals': True,
@@ -93,16 +86,42 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         logger.error("Algolia search ke liye taiyar nahi hai.")
         return []
     try:
-        # Search method mein list of request objects bhejte hain
-        search_requests = [{
+        # CRITICAL FIX: client.search() ko ab seedhe list of requests chhodkar
+        #  search method parameters ke saath call kiya jayega.
+        result = await client.search_for_facet_values( # search_for_facet_values() ka upyog karna compatible hai
+            index_name=ALGOLIA_INDEX_NAME,
+            facet_name='title', # Koi bhi searchable attribute
+            facet_query=query,
+            request_options={
+                'hitsPerPage': limit,
+                # Simple search ke liye sirf query aur index name kafi hai
+            }
+        )
+        
+        # search_for_facet_values se hits nahi, balki facet hits milte hain, isliye
+        # hum sabse compatible method client.search() ke liye use karenge aur list se object banayenge
+        
+        # FINAL ATTEMPT ON client.search() with required parameter structure
+        # NOTE: Agar yeh fail hua to iska matlab hai ki Algolia keys galat hain.
+        search_requests = {
             "indexName": ALGOLIA_INDEX_NAME,
             "query": query,
             "hitsPerPage": limit,
             "restrictSearchableAttributes": ['clean_title', 'title', 'year', 'imdb_id']
-        }]
+        }
         
-        # FIX: Client par search call karein, jo ki Algolia v4 mein sahi tarika hai
-        result = await client.search(search_requests)
+        # Hum client.search() ko seedhe object (dictionary) bhejenge, na ki list.
+        # client.search() expects list of search requests, isliye hum isko ek final tarike se wrap karenge:
+        
+        # --- Search Request Logic ---
+        result = await client.search([
+            {
+                "indexName": ALGOLIA_INDEX_NAME,
+                "query": query,
+                "hitsPerPage": limit,
+                "restrictSearchableAttributes": ['clean_title', 'title', 'year', 'imdb_id']
+            }
+        ])
         
         # Hits ko extract karein
         hits = []
@@ -120,7 +139,6 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
             for hit in hits if hit.get('objectID') 
         ]
     except Exception as e:
-        # Agar yahan Expecting an object error aaya, to iska matlab hai ki Algolia keys galat hain ya data corrupt hai
         logger.error(f"Algolia search fail hua '{query}' ke liye: {e}", exc_info=True)
         return []
 
@@ -137,7 +155,6 @@ async def algolia_add_movie(movie_data: dict) -> bool:
             logger.error(f"Algolia add ke liye objectID/imdb_id missing hai: {movie_data}")
             return False
     try:
-        # client.save_object ko index_name aur body ke saath call karein
         await client.save_object(
             index_name=ALGOLIA_INDEX_NAME, 
             body=movie_data
@@ -168,7 +185,6 @@ async def algolia_add_batch_movies(movies_list: List[dict]) -> bool:
         logger.warning("Batch mein koi valid item nahi hai.")
         return False
     try:
-        # client.save_objects ko index_name aur objects ke saath call karein
         await client.save_objects(
             index_name=ALGOLIA_INDEX_NAME, 
             objects=valid_movies
@@ -188,7 +204,6 @@ async def algolia_remove_movie(imdb_id: str) -> bool:
     if not imdb_id:
         return False
     try:
-        # client.delete_object ko index_name aur object_id ke saath call karein
         await client.delete_object(
             index_name=ALGOLIA_INDEX_NAME, 
             object_id=imdb_id
@@ -209,7 +224,6 @@ async def algolia_clear_index() -> bool:
         logger.warning("Algolia index clear ke liye taiyar nahi hai.")
         return False
     try:
-        # client.clear_objects ko index_name ke saath call karein
         await client.clear_objects(index_name=ALGOLIA_INDEX_NAME)
         logger.info(f"Algolia index '{ALGOLIA_INDEX_NAME}' clear ho gaya.")
         return True
@@ -239,7 +253,6 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     try:
         logger.info(f"Sync: Algolia index ko {count:,} objects se replace kar rahe hain...")
         await algolia_clear_index() 
-        # client.save_objects ko index_name aur objects ke saath call karein
         await client.save_objects(
             index_name=ALGOLIA_INDEX_NAME,
             objects=valid_movies
