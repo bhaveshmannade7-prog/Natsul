@@ -6,7 +6,9 @@ from typing import List, Dict, Tuple
 import algoliasearch
 
 from algoliasearch.search.client import SearchClient
-from algoliasearch.search.index import SearchIndex # Index import kiya
+# --- FIX: Corrected import path for SearchIndex in Algolia v4 ---
+# 'index' se nahi, 'search_index' module se import karein
+from algoliasearch.search.search_index import SearchIndex 
 from dotenv import load_dotenv
 import asyncio
 
@@ -47,6 +49,7 @@ async def initialize_algolia():
         logger.info(f"Algolia Async client initialized.")
         
         # 2. Index object ko initialize karein (yeh recommended tareeka hai)
+        # init_index method SearchIndex object return karta hai
         index = search_client.init_index(ALGOLIA_INDEX_NAME)
 
         # --- Aggressive Typo-Tolerance Settings ---
@@ -100,7 +103,7 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         logger.error("Algolia search ke liye taiyar nahi hai.")
         return []
     try:
-        # --- FIX: Index object ka direct search method use karein (Robust) ---
+        # Index object ka direct search method use karein (Robust)
         result = await index.search(
             query=query,
             request_options={
@@ -109,7 +112,6 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         )
         # Hits ko seedhe result se extract karein
         hits = result.get('hits', []) 
-        # --- END FIX ---
 
         return [
             {
@@ -136,9 +138,8 @@ async def algolia_add_movie(movie_data: dict) -> bool:
             logger.error(f"Algolia add ke liye objectID/imdb_id missing hai: {movie_data}")
             return False
     try:
-        # --- FIX: Index object ka direct save_object method use karein ---
+        # Index object ka direct save_object method use karein
         await index.save_object(movie_data)
-        # --- END FIX ---
         return True
     except Exception as e:
         logger.error(f"Algolia save_object fail hua {movie_data.get('objectID', 'N/A')} ke liye: {e}", exc_info=True)
@@ -165,9 +166,8 @@ async def algolia_add_batch_movies(movies_list: List[dict]) -> bool:
         logger.warning("Batch mein koi valid item nahi hai.")
         return False
     try:
-        # --- FIX: Index object ka direct save_objects method use karein ---
+        # Index object ka direct save_objects method use karein
         await index.save_objects(valid_movies)
-        # --- END FIX ---
         logger.info(f"Algolia batch mein {len(valid_movies)} items process hue.")
         return True
     except Exception as e:
@@ -183,9 +183,8 @@ async def algolia_remove_movie(imdb_id: str) -> bool:
     if not imdb_id:
         return False
     try:
-        # --- FIX: Index object ka direct delete_object method use karein ---
+        # Index object ka direct delete_object method use karein
         await index.delete_object(object_id=imdb_id)
-        # --- END FIX ---
         logger.info(f"Algolia delete request {imdb_id} ke liye bheja gaya.")
         return True
     except Exception as e:
@@ -202,9 +201,8 @@ async def algolia_clear_index() -> bool:
         logger.warning("Algolia index clear ke liye taiyar nahi hai.")
         return False
     try:
-        # --- FIX: Index object ka direct clear_objects method use karein ---
+        # Index object ka direct clear_objects method use karein
         await index.clear_objects()
-        # --- END FIX ---
         logger.info(f"Algolia index '{ALGOLIA_INDEX_NAME}' clear ho gaya.")
         return True
     except Exception as e:
@@ -233,9 +231,8 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     try:
         logger.info(f"Sync: Algolia index ko {count:,} objects se replace kar rahe hain...")
         await algolia_clear_index() 
-        # --- FIX: Index object ka direct save_objects method use karein ---
+        # Index object ka direct save_objects method use karein
         await index.save_objects(valid_movies)
-        # --- END FIX ---
         logger.info(f"Sync poora hua.")
         return True, count
     except Exception as e:
