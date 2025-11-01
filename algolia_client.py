@@ -18,9 +18,12 @@ try:
 except Exception as e:
     logger.warning(f"Could not detect algoliasearch version: {e}")
 
-ALGOLIA_APP_ID = os.getenv("ALGOLIA_APP_ID")
-ALGOLIA_ADMIN_KEY = os.getenv("ALGOLIA_ADMIN_KEY")
-ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME")
+# === CRITICAL FIX: Environment Variables ko strip() karein ===
+# Taaki chhupe hue spaces (hidden spaces) ya newline characters se bacha ja sake.
+ALGOLIA_APP_ID = os.getenv("ALGOLIA_APP_ID").strip() if os.getenv("ALGOLIA_APP_ID") else None
+ALGOLIA_ADMIN_KEY = os.getenv("ALGOLIA_ADMIN_KEY").strip() if os.getenv("ALGOLIA_ADMIN_KEY") else None
+ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME").strip() if os.getenv("ALGOLIA_INDEX_NAME") else None
+# =============================================================
 
 client: SearchClient | None = None 
 _is_ready = False
@@ -35,12 +38,14 @@ async def initialize_algolia():
         return True
 
     if not ALGOLIA_APP_ID or not ALGOLIA_ADMIN_KEY or not ALGOLIA_INDEX_NAME:
-        logger.critical("Algolia environment variables missing. Initialize nahi ho sakta.")
+        # Ab yeh check strip kiye hue values par hoga
+        logger.critical("Algolia environment variables missing ya empty hain. Initialize nahi ho sakta.")
         _is_ready = False
         return False
 
     logger.info(f"Attempting to initialize Algolia client (v4 Async) for index: {ALGOLIA_INDEX_NAME}")
     try:
+        # client ko seedhe strip kiye hue keys se bana rahe hain
         client = SearchClient(ALGOLIA_APP_ID, ALGOLIA_ADMIN_KEY)
         logger.info(f"Algolia Async client initialized.")
         
@@ -57,7 +62,6 @@ async def initialize_algolia():
             'ignorePlurals': True,
         }
         
-        # client.set_settings ko index_name aur settings ke saath call karein
         await client.set_settings(
             index_name=ALGOLIA_INDEX_NAME, 
             index_settings=settings_to_apply
@@ -70,6 +74,8 @@ async def initialize_algolia():
 
     except Exception as e:
         logger.critical(f"Failed to initialize Algolia client ya settings apply karne mein: {e}", exc_info=True)
+        # Agar yahan error aaya, to iska matlab hai ki keys galat hain ya unhone Admin API key nahi use ki.
+        logger.critical("HINT: Kripya dobara confirm karein ki aapne 'Admin API Key' use ki hai, na ki 'Search-Only API Key'.")
         client = None
         _is_ready = False
         return False
@@ -86,42 +92,15 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         logger.error("Algolia search ke liye taiyar nahi hai.")
         return []
     try:
-        # CRITICAL FIX: client.search() ko ab seedhe list of requests chhodkar
-        #  search method parameters ke saath call kiya jayega.
-        result = await client.search_for_facet_values( # search_for_facet_values() ka upyog karna compatible hai
-            index_name=ALGOLIA_INDEX_NAME,
-            facet_name='title', # Koi bhi searchable attribute
-            facet_query=query,
-            request_options={
-                'hitsPerPage': limit,
-                # Simple search ke liye sirf query aur index name kafi hai
-            }
-        )
-        
-        # search_for_facet_values se hits nahi, balki facet hits milte hain, isliye
-        # hum sabse compatible method client.search() ke liye use karenge aur list se object banayenge
-        
-        # FINAL ATTEMPT ON client.search() with required parameter structure
-        # NOTE: Agar yeh fail hua to iska matlab hai ki Algolia keys galat hain.
-        search_requests = {
+        search_requests = [{
             "indexName": ALGOLIA_INDEX_NAME,
             "query": query,
             "hitsPerPage": limit,
             "restrictSearchableAttributes": ['clean_title', 'title', 'year', 'imdb_id']
-        }
+        }]
         
-        # Hum client.search() ko seedhe object (dictionary) bhejenge, na ki list.
-        # client.search() expects list of search requests, isliye hum isko ek final tarike se wrap karenge:
-        
-        # --- Search Request Logic ---
-        result = await client.search([
-            {
-                "indexName": ALGOLIA_INDEX_NAME,
-                "query": query,
-                "hitsPerPage": limit,
-                "restrictSearchableAttributes": ['clean_title', 'title', 'year', 'imdb_id']
-            }
-        ])
+        # client.search() ko list of request objects ke saath call karein
+        result = await client.search(search_requests)
         
         # Hits ko extract karein
         hits = []
