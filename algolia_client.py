@@ -44,7 +44,6 @@ async def initialize_algolia():
 
         # Settings apply using the client object directly (pass index_name)
         settings_to_apply = {
-            # Fix 1: Sabse important hai ki saare attributes searchable ho
             'searchableAttributes': ['clean_title', 'title', 'imdb_id', 'year', 'unordered(title)', 'unordered(clean_title)'], 
             'hitsPerPage': 20,
             
@@ -53,7 +52,6 @@ async def initialize_algolia():
             'minWordSizefor1Typo': 2, 
             'minWordSizefor2Typos': 4, 
             
-            # Agar user ne do shabd diye hain, to dono ko match karne ki koshish karein
             'queryType': 'prefixLast', 
             
             'attributesForFaceting': ['searchable(year)'],
@@ -90,16 +88,16 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         logger.error("Algolia search ke liye taiyar nahi hai.")
         return []
     try:
-        # FIX 2: Single search request ko wrap karne ki bajaye, client.search ka upyog karein
-        # yeh zyada reliable hai
+        # FIX: Sahi structure banayein
         search_request = {
-            "indexName": ALGOLIA_INDEX_NAME, # Index name yahan pass karein
+            "indexName": ALGOLIA_INDEX_NAME,
             "query": query,
             "hitsPerPage": limit,
-            "restrictSearchableAttributes": ['clean_title', 'title', 'year', 'imdb_id'] # Search ko in fields tak simit rakhein
+            "restrictSearchableAttributes": ['clean_title', 'title', 'year', 'imdb_id']
         }
         
-        # client.search method ka upyog karein
+        # FINAL FIX: client.search method mein search requests ki list directly bhejte hain
+        # Upar ki list of dicts ka upyog is tarah kiya jata hai:
         result = await client.search([search_request])
         
         # CRITICAL FIX: Hits ko sahi tarike se extract karein
@@ -107,8 +105,7 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         if result.results and len(result.results) > 0 and 'hits' in result.results[0]:
             hits = result.results[0]['hits']
         
-        logger.info(f"Algolia returned {len(hits)} hits for query: '{query}'") # CRITICAL DIAGNOSTIC
-        # END CRITICAL FIX
+        logger.info(f"Algolia returned {len(hits)} hits for query: '{query}'")
 
         return [
             {
@@ -135,9 +132,8 @@ async def algolia_add_movie(movie_data: dict) -> bool:
             logger.error(f"Algolia add ke liye objectID/imdb_id missing hai: {movie_data}")
             return False
     try:
-        # client.save_object ka upyog karein
         await client.save_object(
-            index_name=ALGOLIA_INDEX_NAME, # Index name pass karein
+            index_name=ALGOLIA_INDEX_NAME, 
             body=movie_data
         )
         return True
@@ -166,9 +162,8 @@ async def algolia_add_batch_movies(movies_list: List[dict]) -> bool:
         logger.warning("Batch mein koi valid item nahi hai.")
         return False
     try:
-        # client.save_objects ka upyog karein
         await client.save_objects(
-            index_name=ALGOLIA_INDEX_NAME, # Index name pass karein
+            index_name=ALGOLIA_INDEX_NAME, 
             objects=valid_movies
         )
         logger.info(f"Algolia batch mein {len(valid_movies)} items process hue.")
@@ -186,9 +181,8 @@ async def algolia_remove_movie(imdb_id: str) -> bool:
     if not imdb_id:
         return False
     try:
-        # client.delete_object ka upyog karein
         await client.delete_object(
-            index_name=ALGOLIA_INDEX_NAME, # Index name pass karein
+            index_name=ALGOLIA_INDEX_NAME, 
             object_id=imdb_id
         )
         logger.info(f"Algolia delete request {imdb_id} ke liye bheja gaya.")
@@ -207,12 +201,11 @@ async def algolia_clear_index() -> bool:
         logger.warning("Algolia index clear ke liye taiyar nahi hai.")
         return False
     try:
-        # client.clear_objects ka upyog karein
         await client.clear_objects(index_name=ALGOLIA_INDEX_NAME)
         logger.info(f"Algolia index '{ALGOLIA_INDEX_NAME}' clear ho gaya.")
         return True
     except Exception as e:
-        logger.error(f"Algolia clear_objects fail hua: {e}", exc_info=True)
+        logger.error(f"Algolia clear_objects failed: {e}", exc_info=True)
         return False
 
 
@@ -237,7 +230,6 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     try:
         logger.info(f"Sync: Algolia index ko {count:,} objects se replace kar rahe hain...")
         await algolia_clear_index() 
-        # client.save_objects ka upyog karein
         await client.save_objects(
             index_name=ALGOLIA_INDEX_NAME,
             objects=valid_movies
