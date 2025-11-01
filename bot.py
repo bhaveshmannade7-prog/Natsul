@@ -49,12 +49,15 @@ def clean_text_for_search(text: str) -> str:
     if not text: return ""
     # 1. Lowercase
     text = text.lower()
-    # 2. Remove special characters (keep alphanumeric and spaces)
-    text = re.sub(r"[^a-z0-9\s]+", " ", text)
-    # 3. Remove "season" and "s01" type patterns (more aggressive)
-    text = re.sub(r"\b(s|season)\s*\d{1,2}\b", "", text)
-    # 4. Normalize whitespace
-    text = re.sub(r"\s+", " ", text).strip()
+    # 2. Keep Unicode letters, numbers, and spaces. Remove punctuation.
+    # \w includes letters, numbers, and underscore (in Python 3, this includes Unicode)
+    text = re.sub(r"[^\w\s]+", " ", text, flags=re.UNICODE)
+    # 3. Replace underscore (from \w) with a space
+    text = re.sub(r"_", " ", text, flags=re.UNICODE)
+    # 4. Remove "season" and "s01" type patterns (more aggressive)
+    text = re.sub(r"\b(s|season)\s*\d{1,2}\b", "", text, flags=re.UNICODE | re.IGNORECASE)
+    # 5. Normalize whitespace
+    text = re.sub(r"\s+", " ", text, flags=re.UNICODE).strip()
     return text
 # --- End Helpers ---
 
