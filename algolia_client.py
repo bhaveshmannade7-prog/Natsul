@@ -6,7 +6,8 @@ from typing import List, Dict, Tuple, Any
 import algoliasearch
 
 from algoliasearch.search.client import SearchClient
-from algoliasearch.search.search_index import SearchIndex # Import for type-hinting only
+# >>> CRITICAL FIX: ModuleNotFoundError se bachne ke liye koi internal import nahi.
+# from algoliasearch.search.search_index import SearchIndex # Hata diya gaya
 from dotenv import load_dotenv
 import asyncio
 
@@ -24,7 +25,7 @@ ALGOLIA_ADMIN_KEY = os.getenv("ALGOLIA_ADMIN_KEY")
 ALGOLIA_INDEX_NAME = os.getenv("ALGOLIA_INDEX_NAME")
 
 client: SearchClient | None = None 
-index: Any | None = None # Index object ko Any rakhein taaki import error na aaye
+index: Any | None = None # Index object ko Any rakhein
 _is_ready = False
 
 # --- New Helper to get Index ---
@@ -33,10 +34,10 @@ def _get_index(search_client: SearchClient | None, index_name: str) -> Any | Non
     if not search_client:
         return None
     try:
-        # Client se index object ko initialize karna sabse reliable method hai.
-        # Yeh method har Algolia operation ke liye zaroori hai.
+        # client.init_index() method Algolia index object deta hai
         return search_client.init_index(index_name)
     except Exception as e:
+        # Agar yeh yahan fail hua to ya to keys galat hain ya connectivity issue hai.
         logger.critical(f"FATAL: client.init_index failed for {index_name}: {e}", exc_info=False)
         return None
 # --- End New Helper ---
@@ -77,7 +78,7 @@ async def initialize_algolia():
             'ignorePlurals': True,
         }
         
-        # Index object par set_settings call karein (yeh sabse reliable hai)
+        # Index object par set_settings call karein
         await index.set_settings(settings_to_apply)
         logger.info(f"Algolia settings applied for index '{ALGOLIA_INDEX_NAME}'.")
 
@@ -103,7 +104,7 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         logger.error("Algolia search ke liye taiyar nahi hai.")
         return []
     try:
-        # FINAL FIX: index object par seedhe search call karein
+        # index object par seedhe search call karein (sabse reliable)
         result = await index.search(
             query=query, 
             request_options={
@@ -113,7 +114,7 @@ async def algolia_search(query: str, limit: int = 20) -> List[Dict]:
         )
         
         # Hits ko extract karein
-        hits = result.get('hits', []) # index.search() result ek dictionary deta hai
+        hits = result.get('hits', []) 
         
         logger.info(f"Algolia returned {len(hits)} hits for query: '{query}'")
 
@@ -136,7 +137,6 @@ async def algolia_add_movie(movie_data: dict) -> bool:
         logger.warning("Algolia movie add ke liye taiyar nahi hai.")
         return False
     if not index: return False
-    # ... (rest of the logic)
     if 'objectID' not in movie_data or not movie_data['objectID']:
         if 'imdb_id' in movie_data and movie_data['imdb_id']:
             movie_data['objectID'] = movie_data['imdb_id']
@@ -144,7 +144,7 @@ async def algolia_add_movie(movie_data: dict) -> bool:
             logger.error(f"Algolia add ke liye objectID/imdb_id missing hai: {movie_data}")
             return False
     try:
-        await index.save_object(movie_data) # Index object par call karein
+        await index.save_object(movie_data)
         return True
     except Exception as e:
         logger.error(f"Algolia save_object fail hua {movie_data.get('objectID', 'N/A')} ke liye: {e}", exc_info=True)
@@ -157,7 +157,6 @@ async def algolia_add_batch_movies(movies_list: List[dict]) -> bool:
         logger.warning("Algolia batch add ke liye taiyar nahi hai.")
         return False
     if not index: return False
-    # ... (rest of the logic)
     if not movies_list:
         return True
     valid_movies = []
@@ -173,7 +172,7 @@ async def algolia_add_batch_movies(movies_list: List[dict]) -> bool:
         logger.warning("Batch mein koi valid item nahi hai.")
         return False
     try:
-        await index.save_objects(valid_movies) # Index object par call karein
+        await index.save_objects(valid_movies)
         logger.info(f"Algolia batch mein {len(valid_movies)} items process hue.")
         return True
     except Exception as e:
@@ -187,11 +186,10 @@ async def algolia_remove_movie(imdb_id: str) -> bool:
         logger.warning("Algolia movie remove ke liye taiyar nahi hai.")
         return False
     if not index: return False
-    # ... (rest of the logic)
     if not imdb_id:
         return False
     try:
-        await index.delete_object(imdb_id) # Index object par call karein
+        await index.delete_object(imdb_id)
         logger.info(f"Algolia delete request {imdb_id} ke liye bheja gaya.")
         return True
     except Exception as e:
@@ -208,9 +206,8 @@ async def algolia_clear_index() -> bool:
         logger.warning("Algolia index clear ke liye taiyar nahi hai.")
         return False
     if not index: return False
-    # ... (rest of the logic)
     try:
-        await index.clear_objects() # Index object par call karein
+        await index.clear_objects()
         logger.info(f"Algolia index '{ALGOLIA_INDEX_NAME}' clear ho gaya.")
         return True
     except Exception as e:
@@ -224,7 +221,6 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
         logger.error("Algolia sync ke liye taiyar nahi hai.")
         return False, 0
     if not index: return False, 0
-    # ... (rest of the logic)
     valid_movies = []
     for m in all_movies_data:
         if 'objectID' not in m or not m['objectID']:
@@ -237,12 +233,11 @@ async def algolia_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     count = len(valid_movies)
     if not valid_movies:
         logger.info("Sync: DB se koi valid data nahi mila, index clear kar rahe hain.")
-        # Clear index using the index object method
         return await algolia_clear_index(), 0
     try:
         logger.info(f"Sync: Algolia index ko {count:,} objects se replace kar rahe hain...")
         await algolia_clear_index() 
-        await index.save_objects(valid_movies) # Index object par call karein
+        await index.save_objects(valid_movies)
         logger.info(f"Sync poora hua.")
         return True, count
     except Exception as e:
