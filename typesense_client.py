@@ -4,9 +4,9 @@ import os
 import logging
 from typing import List, Dict, Tuple
 import typesense
-# FIX: 'Conflict' ko wapas import karein, kyonki ab hum naya library use kar rahe hain
+# FIX: 'Conflict' ko wapas import karein
 from typesense.exceptions import ObjectNotFound, Conflict
-from httpx import HTTPStatusError # Yeh 409 error ke liye zaroori hai
+from httpx import HTTPStatusError 
 from dotenv import load_dotenv
 import asyncio
 
@@ -17,7 +17,7 @@ logger = logging.getLogger("bot.typesense")
 TYPESENSE_API_KEY = os.getenv("TYPESENSE_API_KEY")
 TYPESENSE_HOST = os.getenv("TYPESENSE_HOST")
 TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "443")
-TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "https")
+TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "httpsS")
 
 COLLECTION_NAME = "movies" # Collection ka naam
 
@@ -96,7 +96,6 @@ async def initialize_typesense():
         return True
 
     except Exception as e:
-        # Yahaan par NameResolutionError ya ConnectionError aayega agar host galat hai
         logger.critical(f"Failed to initialize Typesense client: {e}", exc_info=True)
         client = None
         _is_ready = False
