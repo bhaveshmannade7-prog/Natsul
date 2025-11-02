@@ -8,8 +8,9 @@ import asyncio
 
 # typesense library import
 import typesense
-# --- FIX (v1.1.1): 'RequestError' ko 'typesense.exceptions' se import kiya ---
-from typesense.exceptions import ObjectNotFound, RequestError 
+# --- FIX (v1.1.1): 'RequestError' ko hata diya, 'httpx' ko import kiya ---
+import httpx # HTTP errors ko handle karne ke liye
+from typesense.exceptions import ObjectNotFound 
 # --- END FIX ---
 
 load_dotenv()
@@ -74,12 +75,16 @@ async def initialize_typesense():
             await client.collections.create(movie_schema)
             logger.info(f"Successfully created collection '{COLLECTION_NAME}'.")
         
-        except RequestError as e:
-            # Agar collection pehle se hai (HTTP 409 Conflict)
-            if e.status_code == 409:
+        # --- FIX (v1.1.1): Error ko 'httpx.HTTPStatusError' se handle kiya ---
+        except httpx.HTTPStatusError as e:
+            # Check if the error is a 409 Conflict (Collection already exists)
+            if e.response.status_code == 409:
                 logger.warning(f"Collection '{COLLECTION_NAME}' creation conflict (likely exists). Proceeding.")
             else:
-                raise e # Doosra error hai, toh fail karein
+                # Doosra error hai, toh fail karein
+                logger.critical(f"HTTP error during typesense init: {e}", exc_info=True)
+                raise e
+        # --- END FIX ---
 
         _is_ready = True
         logger.info("Typesense initialization successful.")
@@ -226,6 +231,12 @@ async def typesense_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     try:
         await client.collections.create(movie_schema)
         logger.info(f"Sync: Re-created collection '{COLLECTION_NAME}'.")
+    except httpx.HTTPStatusError as e: # FIX: Sahi error ko pakda
+        if e.response.status_code == 409:
+            logger.warning(f"Sync: Collection '{COLLECTION_NAME}' re-creation conflict (likely exists). Proceeding.")
+        else:
+            logger.error(f"Sync: Failed to re-create collection: {e}", exc_info=True)
+            return False, 0
     except Exception as e:
         logger.error(f"Sync: Failed to re-create collection: {e}", exc_info=True)
         return False, 0
