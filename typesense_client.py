@@ -16,7 +16,7 @@ logger = logging.getLogger("bot.typesense")
 TYPESENSE_API_KEY = os.getenv("TYPESENSE_API_KEY")
 TYPESENSE_HOST = os.getenv("TYPESENSE_HOST")
 TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "443")
-TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "https")
+TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "httpsR")
 
 COLLECTION_NAME = "movies" # Collection ka naam
 
@@ -52,20 +52,18 @@ async def initialize_typesense():
     logger.info(f"Initializing Typesense client for {TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}")
     
     try:
-        # --- FIX: `client_factory` ko hata diya gaya hai ---
-        # typesense v1.x client 'httpx' ka istemal karta hai aur 
-        # 'await' ke saath apne aap async ho jaata hai.
+        # --- FIX: `nodes` ki jagah `base_url` ka istemal karein ---
+        # typesense v1.x client 'base_url' expect karta hai.
+        
+        # Poora URL banayein
+        base_url = f"{TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}"
+        
         client = typesense.Client(
-            nodes=[{
-                'host': TYPESENSE_HOST,
-                'port': TYPESENSE_PORT,
-                'protocol': TYPESENSE_PROTOCOL
-            }],
+            base_url=base_url, # YEH HAI SAHI PARAMETER
             api_key=TYPESENSE_API_KEY,
             connection_timeout_seconds=5,
             retry_interval_seconds=1,
             num_retries=3
-            # AiohttpAdapter wali line yahan se hata di gayi hai
         )
         # --- END FIX ---
 
