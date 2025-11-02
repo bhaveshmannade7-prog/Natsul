@@ -3,8 +3,9 @@
 import os
 import logging
 from typing import List, Dict, Tuple
-import typesense # Yeh ab 'typesense-python' package se aayega
-from typesense.exceptions import ObjectNotFound, Conflict # FIX: Sahi exceptions import kiye
+import typesense
+from typesense.exceptions import ObjectNotFound
+from httpx import HTTPStatusError # FIX: Conflict ke liye isse import karein (aapka original code sahi tha)
 from dotenv import load_dotenv
 import asyncio
 
@@ -19,7 +20,7 @@ TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "https")
 
 COLLECTION_NAME = "movies" # Collection ka naam
 
-client: typesense.Client = None # Type hint add kiya
+client: typesense.Client = None
 _is_ready = False
 
 # === SCHEMA DEFINITION ===
@@ -51,9 +52,6 @@ async def initialize_typesense():
     logger.info(f"Initializing Typesense client for {TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}")
     
     try:
-        # typesense-python v1.0+ async-first hai.
-        # 'config' object bilkul sahi hai.
-        
         config = {
             'nodes': [{
                 'host': TYPESENSE_HOST,
@@ -66,7 +64,7 @@ async def initialize_typesense():
             'num_retries': 3
         }
         
-        client = typesense.Client(config) # Yeh ab 'typesense-python' ka async client hai
+        client = typesense.Client(config)
         
         # 1. Check karein ki collection pehle se hai ya nahi
         try:
@@ -80,8 +78,12 @@ async def initialize_typesense():
             try:
                 await client.collections.create(movie_schema)
                 logger.info(f"Successfully created Typesense collection '{COLLECTION_NAME}'.")
-            except Conflict: # FIX: Sahi exception (409) ka istemal kiya
-                logger.warning(f"Collection creation conflict (409), assuming it exists now.")
+            except HTTPStatusError as e: # FIX: Yahaan 'Conflict' ki jagah 'HTTPStatusError' aayega
+                if e.response.status_code == 409: # Check karein ki error 409 (Conflict) hai
+                    logger.warning(f"Collection creation conflict (409), assuming it exists now.")
+                else:
+                    logger.error(f"Failed to create collection (HTTPError): {e}", exc_info=True)
+                    raise # Doosre HTTP errors ko raise karein
             except Exception as e:
                 logger.error(f"Failed to create collection (Unknown Error): {e}", exc_info=True)
                 raise
@@ -119,7 +121,6 @@ async def typesense_search(query: str, limit: int = 20) -> List[Dict]:
     }
     
     try:
-        # Client ab async hai, isliye 'await' sahi se kaam karega
         result = await client.collections[COLLECTION_NAME].documents.search(search_params)
         
         hits = result.get('hits', [])
@@ -176,7 +177,6 @@ async def typesense_add_batch_movies(movies_list: List[dict]) -> bool:
         return False
 
     try:
-        # 'import_' typesense-python mein 'import_documents' hai
         results = await client.collections[COLLECTION_NAME].documents.import_(formatted_list, {'action': 'upsert'})
         
         failed_items = [res for res in results if not res.get('success', True)]
