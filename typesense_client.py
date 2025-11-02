@@ -8,9 +8,8 @@ import asyncio
 
 # typesense library import
 import typesense
-# --- FIX (v1.1.1): 'Conflict' ko 'RequestError' se replace kiya ---
-from typesense.exceptions import ObjectNotFound
-from typesense.api_call import RequestError # 'Conflict' (409) ab ismein aata hai
+# --- FIX (v1.1.1): 'RequestError' ko 'typesense.exceptions' se import kiya ---
+from typesense.exceptions import ObjectNotFound, RequestError 
 # --- END FIX ---
 
 load_dotenv()
@@ -75,14 +74,12 @@ async def initialize_typesense():
             await client.collections.create(movie_schema)
             logger.info(f"Successfully created collection '{COLLECTION_NAME}'.")
         
-        # --- FIX (v1.1.1): 'Conflict' ko 'RequestError' se handle kiya ---
         except RequestError as e:
             # Agar collection pehle se hai (HTTP 409 Conflict)
             if e.status_code == 409:
                 logger.warning(f"Collection '{COLLECTION_NAME}' creation conflict (likely exists). Proceeding.")
             else:
                 raise e # Doosra error hai, toh fail karein
-        # --- END FIX ---
 
         _is_ready = True
         logger.info("Typesense initialization successful.")
