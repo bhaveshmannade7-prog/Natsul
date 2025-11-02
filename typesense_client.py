@@ -3,9 +3,8 @@
 import os
 import logging
 from typing import List, Dict, Tuple
-import typesense
-from typesense.exceptions import ObjectNotFound
-from httpx import HTTPStatusError # 409 Conflict ke liye
+import typesense # Yeh ab 'typesense-python' package se aayega
+from typesense.exceptions import ObjectNotFound, Conflict # FIX: Sahi exceptions import kiye
 from dotenv import load_dotenv
 import asyncio
 
@@ -20,7 +19,7 @@ TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "https")
 
 COLLECTION_NAME = "movies" # Collection ka naam
 
-client = None
+client: typesense.Client = None # Type hint add kiya
 _is_ready = False
 
 # === SCHEMA DEFINITION ===
@@ -28,11 +27,11 @@ movie_schema = {
     'name': COLLECTION_NAME,
     'fields': [
         {'name': 'imdb_id', 'type': 'string', 'facet': False, 'sort': True},
-        {'name': 'title', 'type': 'string', 'facet': False, 'sort': True}, # Sortable banaya
+        {'name': 'title', 'type': 'string', 'facet': False, 'sort': True},
         {'name': 'clean_title', 'type': 'string', 'facet': False},
-        {'name': 'year', 'type': 'string', 'facet': True, 'optional': True, 'sort': True}, # Sortable banaya
+        {'name': 'year', 'type': 'string', 'facet': True, 'optional': True, 'sort': True},
     ],
-    'default_sorting_field': 'title' # Ab yeh valid hai
+    'default_sorting_field': 'title'
 }
 # === END SCHEMA ===
 
@@ -52,8 +51,8 @@ async def initialize_typesense():
     logger.info(f"Initializing Typesense client for {TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}")
     
     try:
-        # --- FIX: `nodes` aur `api_key` ko ek 'config' dict mein daalein ---
-        # typesense v1.x client ek 'config' object expect karta hai.
+        # typesense-python v1.0+ async-first hai.
+        # 'config' object bilkul sahi hai.
         
         config = {
             'nodes': [{
@@ -67,9 +66,8 @@ async def initialize_typesense():
             'num_retries': 3
         }
         
-        client = typesense.Client(config) # YEH HAI SAHI TAREKA
-        # --- END FIX ---
-
+        client = typesense.Client(config) # Yeh ab 'typesense-python' ka async client hai
+        
         # 1. Check karein ki collection pehle se hai ya nahi
         try:
             logger.info(f"Checking for Typesense collection '{COLLECTION_NAME}'...")
@@ -82,12 +80,8 @@ async def initialize_typesense():
             try:
                 await client.collections.create(movie_schema)
                 logger.info(f"Successfully created Typesense collection '{COLLECTION_NAME}'.")
-            except HTTPStatusError as e:
-                if e.response.status_code == 409:
-                    logger.warning(f"Collection creation conflict (409), assuming it exists now.")
-                else:
-                    logger.error(f"Failed to create collection (HTTPError): {e}", exc_info=True)
-                    raise
+            except Conflict: # FIX: Sahi exception (409) ka istemal kiya
+                logger.warning(f"Collection creation conflict (409), assuming it exists now.")
             except Exception as e:
                 logger.error(f"Failed to create collection (Unknown Error): {e}", exc_info=True)
                 raise
@@ -97,6 +91,7 @@ async def initialize_typesense():
         return True
 
     except Exception as e:
+        # Yahaan par NameResolutionError ya ConnectionError aayega agar host galat hai
         logger.critical(f"Failed to initialize Typesense client: {e}", exc_info=True)
         client = None
         _is_ready = False
@@ -124,6 +119,7 @@ async def typesense_search(query: str, limit: int = 20) -> List[Dict]:
     }
     
     try:
+        # Client ab async hai, isliye 'await' sahi se kaam karega
         result = await client.collections[COLLECTION_NAME].documents.search(search_params)
         
         hits = result.get('hits', [])
@@ -146,8 +142,6 @@ async def typesense_add_movie(movie_data: dict) -> bool:
         logger.warning("Typesense not ready for add_movie.")
         return False
     
-    # Typesense 'id' field chahta hai, jo hum 'imdb_id' se denge
-    # Lekin document mein 'imdb_id' bhi hona chahiye
     document = movie_data.copy()
     if 'id' not in document:
          document['id'] = document['imdb_id']
@@ -168,15 +162,13 @@ async def typesense_add_batch_movies(movies_list: List[dict]) -> bool:
     if not movies_list:
         return True
 
-    # Batch ke liye documents ko format karein (sab mein 'id' field hona zaroori hai)
     formatted_list = []
     for item in movies_list:
-        # 'imdb_id' ko 'id' ki tarah copy karein
         if 'imdb_id' in item:
             item['id'] = item['imdb_id']
         elif 'id' not in item:
              logger.warning(f"Skipping batch item (no ID): {item.get('title')}")
-             continue # ID ke bina skip karein
+             continue
         formatted_list.append(item)
 
     if not formatted_list:
@@ -184,6 +176,7 @@ async def typesense_add_batch_movies(movies_list: List[dict]) -> bool:
         return False
 
     try:
+        # 'import_' typesense-python mein 'import_documents' hai
         results = await client.collections[COLLECTION_NAME].documents.import_(formatted_list, {'action': 'upsert'})
         
         failed_items = [res for res in results if not res.get('success', True)]
