@@ -156,7 +156,7 @@ async def typesense_add_movie(movie_data: dict) -> bool:
         await client.collections[COLLECTION_NAME].documents.upsert(document, {'action': 'upsert'})
         return True
     except Exception as e:
-        logger.error(f"Typesense upsert failed for {document['id']}: {e}", exc_info=True)
+        logger.error(f"Typesense upsert failed for {document.get('id', 'N/A')}: {e}", exc_info=True)
         return False
 
 
@@ -171,9 +171,17 @@ async def typesense_add_batch_movies(movies_list: List[dict]) -> bool:
     # Batch ke liye documents ko format karein (sab mein 'id' field hona zaroori hai)
     formatted_list = []
     for item in movies_list:
-        if 'id' not in item:
+        # 'imdb_id' ko 'id' ki tarah copy karein
+        if 'imdb_id' in item:
             item['id'] = item['imdb_id']
+        elif 'id' not in item:
+             logger.warning(f"Skipping batch item (no ID): {item.get('title')}")
+             continue # ID ke bina skip karein
         formatted_list.append(item)
+
+    if not formatted_list:
+        logger.warning("No valid items in batch.")
+        return False
 
     try:
         results = await client.collections[COLLECTION_NAME].documents.import_(formatted_list, {'action': 'upsert'})
