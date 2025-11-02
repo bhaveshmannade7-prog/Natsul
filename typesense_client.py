@@ -16,7 +16,7 @@ logger = logging.getLogger("bot.typesense")
 TYPESENSE_API_KEY = os.getenv("TYPESENSE_API_KEY")
 TYPESENSE_HOST = os.getenv("TYPESENSE_HOST")
 TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "443")
-TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "httpsR")
+TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "https")
 
 COLLECTION_NAME = "movies" # Collection ka naam
 
@@ -52,19 +52,22 @@ async def initialize_typesense():
     logger.info(f"Initializing Typesense client for {TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}")
     
     try:
-        # --- FIX: `nodes` ki jagah `base_url` ka istemal karein ---
-        # typesense v1.x client 'base_url' expect karta hai.
+        # --- FIX: `nodes` aur `api_key` ko ek 'config' dict mein daalein ---
+        # typesense v1.x client ek 'config' object expect karta hai.
         
-        # Poora URL banayein
-        base_url = f"{TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}"
+        config = {
+            'nodes': [{
+                'host': TYPESENSE_HOST,
+                'port': TYPESENSE_PORT,
+                'protocol': TYPESENSE_PROTOCOL
+            }],
+            'api_key': TYPESENSE_API_KEY,
+            'connection_timeout_seconds': 5,
+            'retry_interval_seconds': 1,
+            'num_retries': 3
+        }
         
-        client = typesense.Client(
-            base_url=base_url, # YEH HAI SAHI PARAMETER
-            api_key=TYPESENSE_API_KEY,
-            connection_timeout_seconds=5,
-            retry_interval_seconds=1,
-            num_retries=3
-        )
+        client = typesense.Client(config) # YEH HAI SAHI TAREKA
         # --- END FIX ---
 
         # 1. Check karein ki collection pehle se hai ya nahi
@@ -143,14 +146,17 @@ async def typesense_add_movie(movie_data: dict) -> bool:
         logger.warning("Typesense not ready for add_movie.")
         return False
     
-    doc_id = movie_data['imdb_id']
+    # Typesense 'id' field chahta hai, jo hum 'imdb_id' se denge
+    # Lekin document mein 'imdb_id' bhi hona chahiye
     document = movie_data.copy()
+    if 'id' not in document:
+         document['id'] = document['imdb_id']
     
     try:
         await client.collections[COLLECTION_NAME].documents.upsert(document, {'action': 'upsert'})
         return True
     except Exception as e:
-        logger.error(f"Typesense upsert failed for {doc_id}: {e}", exc_info=True)
+        logger.error(f"Typesense upsert failed for {document['id']}: {e}", exc_info=True)
         return False
 
 
@@ -162,15 +168,22 @@ async def typesense_add_batch_movies(movies_list: List[dict]) -> bool:
     if not movies_list:
         return True
 
+    # Batch ke liye documents ko format karein (sab mein 'id' field hona zaroori hai)
+    formatted_list = []
+    for item in movies_list:
+        if 'id' not in item:
+            item['id'] = item['imdb_id']
+        formatted_list.append(item)
+
     try:
-        results = await client.collections[COLLECTION_NAME].documents.import_(movies_list, {'action': 'upsert'})
+        results = await client.collections[COLLECTION_NAME].documents.import_(formatted_list, {'action': 'upsert'})
         
         failed_items = [res for res in results if not res.get('success', True)]
         if failed_items:
             logger.error(f"Typesense batch failed for {len(failed_items)} items. First error: {failed_items[0].get('error')}")
             return False
             
-        logger.info(f"Typesense batch processed {len(movies_list)} items.")
+        logger.info(f"Typesense batch processed {len(formatted_list)} items.")
         return True
     except Exception as e:
         logger.error(f"Typesense batch import failed: {e}", exc_info=True)
