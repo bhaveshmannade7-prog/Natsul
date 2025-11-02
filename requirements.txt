@@ -2,8 +2,7 @@ aiogram==3.10.0
 fastapi==0.111.1
 uvicorn==0.30.3
 python-multipart==0.0.9
-typesense # FIX: Version pin (==0.25.2) ko hata diya
-aiohttp # typesense async ke liye zaroori hai
+typesense-python==2.1.1 # FIX: Sahi package ka istemal kiya
 python-dotenv==1.0.1
 aiofiles==23.2.1
 httpx==0.28.1
