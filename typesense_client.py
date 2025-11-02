@@ -4,8 +4,9 @@ import os
 import logging
 from typing import List, Dict, Tuple
 import typesense
-from typesense.exceptions import ObjectNotFound
-from httpx import HTTPStatusError # FIX: Conflict ke liye isse import karein (aapka original code sahi tha)
+# FIX: 'Conflict' ko wapas import karein, kyonki ab hum naya library use kar rahe hain
+from typesense.exceptions import ObjectNotFound, Conflict
+from httpx import HTTPStatusError # Yeh 409 error ke liye zaroori hai
 from dotenv import load_dotenv
 import asyncio
 
@@ -78,12 +79,14 @@ async def initialize_typesense():
             try:
                 await client.collections.create(movie_schema)
                 logger.info(f"Successfully created Typesense collection '{COLLECTION_NAME}'.")
-            except HTTPStatusError as e: # FIX: Yahaan 'Conflict' ki jagah 'HTTPStatusError' aayega
-                if e.response.status_code == 409: # Check karein ki error 409 (Conflict) hai
+            except (Conflict, HTTPStatusError) as e: # FIX: Dono errors ko pakdein
+                if isinstance(e, HTTPStatusError) and e.response.status_code == 409:
                     logger.warning(f"Collection creation conflict (409), assuming it exists now.")
+                elif isinstance(e, Conflict):
+                     logger.warning(f"Collection creation conflict (Conflict Exception), assuming it exists now.")
                 else:
                     logger.error(f"Failed to create collection (HTTPError): {e}", exc_info=True)
-                    raise # Doosre HTTP errors ko raise karein
+                    raise
             except Exception as e:
                 logger.error(f"Failed to create collection (Unknown Error): {e}", exc_info=True)
                 raise
