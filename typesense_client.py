@@ -4,11 +4,11 @@ import os
 import logging
 from typing import List, Dict, Tuple
 import typesense
-from typesense.exceptions import ObjectNotFound
+from typesense.exceptions import ObjectNotFound, TypesenseClientError
 from httpx import HTTPStatusError
 from dotenv import load_dotenv
 import asyncio
-import certifi # <--- Certifi ko import karna zaroori hai
+import certifi # Certifi zaroori hai
 
 load_dotenv()
 
@@ -20,10 +20,10 @@ def run_sync(func):
 
 TYPESENSE_API_KEY = os.getenv("TYPESENSE_API_KEY")
 TYPESENSE_HOST = os.getenv("TYPESENSE_HOST")
-TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "443")
-TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "HTTPS") # Default "HTTPS" hi rakhein
+TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "404") # 443 ya 8108 (Typesense default)
+TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "https")
 
-COLLECTION_NAME = "movies" # Collection ka naam
+COLLECTION_NAME = "movies"
 
 client = None
 _is_ready = False
@@ -43,54 +43,48 @@ movie_schema = {
 
 
 async def initialize_typesense():
-    """Typesense client ko initialize karta hai aur collection check karta hai."""
+    """Typesense client ko initialize karta hai (Ab retry logic ke saath)."""
     global client, _is_ready
-    if _is_ready:
-        logger.info("Typesense already initialized.")
-        return True
+    
+    # Is function ko _is_ready check nahi karna hai, taaki yeh baar baar call ho sake
+    _is_ready = False # Pehle reset karein
 
     if not all([TYPESENSE_API_KEY, TYPESENSE_HOST, TYPESENSE_PORT, TYPESENSE_PROTOCOL]):
         logger.critical("Typesense environment variables missing. Cannot initialize.")
-        _is_ready = False
         return False
 
-    logger.info(f"Initializing Typesense client for {TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}")
+    logger.info(f"Attempting to initialize Typesense client for {TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}")
     
     try:
-        # --- YEH HAI ASLI FIX (The Correct Fix) ---
-
-        # 1. Pehle certifi ka path lein
         ca_path = certifi.where()
         logger.info(f"Using certifi CA bundle for Typesense at: {ca_path}")
 
-        # 2. Typesense config banayein
         config = {
             'nodes': [{
                 'host': TYPESENSE_HOST,
                 'port': TYPESENSE_PORT,
-                'protocol': TYPESENSE_PROTOCOL.lower() # 'https' ya 'http' hona chahiye
+                'protocol': TYPESENSE_PROTOCOL.lower()
             }],
             'api_key': TYPESENSE_API_KEY,
             'connection_timeout_seconds': 5,
             'retry_interval_seconds': 1,
             'num_retries': 3,
-            
-            # 3. SSL settings ko 'httpx_client_options' ke andar pass karein
+            # SSL settings ko 'httpx_client_options' ke andar pass karein
             'httpx_client_options': {
                 'verify': ca_path
             }
-            # --- END FIX ---
         }
         
-        # 4. Client ko sirf 'config' object pass karein
+        # Client banayein
         client = typesense.Client(config)
         
-        # --- END OF FIX ---
-
+        # Health check karke connection test karein
+        await run_sync(lambda: client.health.retrieve())
+        logger.info("Typesense health check OK.")
 
         # 1. Check karein ki collection pehle se hai ya nahi
         try:
-            logger.info(f"Checking for Typesense collection '{COLLECTION_NAME}'...")
+            logger.debug(f"Checking for Typesense collection '{COLLECTION_NAME}'...")
             await run_sync(lambda: client.collections[COLLECTION_NAME].retrieve())
             logger.info(f"Typesense collection '{COLLECTION_NAME}' found.")
 
@@ -115,20 +109,43 @@ async def initialize_typesense():
         return True
 
     except Exception as e:
-        logger.critical(f"Failed to initialize Typesense client: {e}", exc_info=True)
+        logger.critical(f"Failed to initialize Typesense client: {e}", exc_info=False) # Full trace log na karein
+        logger.debug(f"Typesense init error details: {e}", exc_info=True) # Debug mein full trace
         client = None
         _is_ready = False
         return False
 
 
-def is_typesense_ready():
-    """Check karein ki Typesense client initialize hua ya nahi."""
-    return _is_ready and client is not None
+async def is_typesense_ready():
+    """
+    Check karein ki Typesense ready hai ya nahi.
+    Agar nahi, toh connect karne ki koshish karein.
+    """
+    global _is_ready, client
+    if _is_ready and client:
+        # Connection ko ping karke check karein
+        try:
+            await run_sync(lambda: client.health.retrieve())
+            logger.debug("Typesense connection re-verified.")
+            return True
+        except Exception as e:
+            logger.warning(f"Typesense connection lost. Reconnecting... Error: {e}")
+            _is_ready = False
+            client = None
+    
+    # Agar ready nahi hai, ya check fail hua hai, toh dobara connect try karein
+    logger.info("Typesense not ready, attempting to connect...")
+    if await initialize_typesense():
+        return True
+    else:
+        logger.error("Typesense connection attempt failed.")
+        return False
 
 
 async def typesense_search(query: str, limit: int = 20) -> List[Dict]:
     """Typesense mein movies search karein."""
-    if not is_typesense_ready():
+    # is_typesense_ready() ab bot.py mein call hoga
+    if not _is_ready or not client:
         logger.error("Typesense not ready for search.")
         return []
 
@@ -160,7 +177,7 @@ async def typesense_search(query: str, limit: int = 20) -> List[Dict]:
 
 async def typesense_add_movie(movie_data: dict) -> bool:
     """Typesense mein ek movie add/update karein."""
-    if not is_typesense_ready():
+    if not _is_ready or not client:
         logger.warning("Typesense not ready for add_movie.")
         return False
 
@@ -178,21 +195,19 @@ async def typesense_add_movie(movie_data: dict) -> bool:
 
 async def typesense_add_batch_movies(movies_list: List[dict]) -> bool:
     """Typesense mein movies ko batch mein add karein."""
-    if not is_typesense_ready():
+    if not _is_ready or not client:
         logger.warning("Typesense not ready for add_batch.")
         return False
     if not movies_list:
         return True
 
-    # Batch ke liye documents ko format karein (sab mein 'id' field hona zaroori hai)
     formatted_list = []
     for item in movies_list:
-        # 'imdb_id' ko 'id' ki tarah copy karein
         if 'imdb_id' in item:
             item['id'] = item['imdb_id']
         elif 'id' not in item:
              logger.warning(f"Skipping batch item (no ID): {item.get('title')}")
-             continue # ID ke bina skip karein
+             continue
         formatted_list.append(item)
 
     if not formatted_list:
@@ -216,7 +231,7 @@ async def typesense_add_batch_movies(movies_list: List[dict]) -> bool:
 
 async def typesense_remove_movie(imdb_id: str) -> bool:
     """Typesense se ek movie delete karein."""
-    if not is_typesense_ready():
+    if not _is_ready or not client:
         logger.warning("Typesense not ready for remove_movie.")
         return False
     if not imdb_id:
@@ -236,7 +251,7 @@ async def typesense_remove_movie(imdb_id: str) -> bool:
 
 async def typesense_sync_data(all_movies_data: List[Dict]) -> Tuple[bool, int]:
     """Poore DB ko Typesense se sync karein (Collection delete karke naya banayein)."""
-    if not is_typesense_ready():
+    if not _is_ready or not client:
         logger.error("Typesense not ready for sync.")
         return False, 0
     
