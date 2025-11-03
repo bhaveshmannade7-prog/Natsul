@@ -20,7 +20,7 @@ def run_sync(func):
 
 TYPESENSE_API_KEY = os.getenv("TYPESENSE_API_KEY")
 TYPESENSE_HOST = os.getenv("TYPESENSE_HOST")
-TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "404") # 443 ya 8108 (Typesense default)
+TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "443") # 443 ya 8108 (Typesense default)
 TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "https")
 
 COLLECTION_NAME = "movies"
@@ -46,7 +46,6 @@ async def initialize_typesense():
     """Typesense client ko initialize karta hai (Ab retry logic ke saath)."""
     global client, _is_ready
     
-    # Is function ko _is_ready check nahi karna hai, taaki yeh baar baar call ho sake
     _is_ready = False # Pehle reset karein
 
     if not all([TYPESENSE_API_KEY, TYPESENSE_HOST, TYPESENSE_PORT, TYPESENSE_PROTOCOL]):
@@ -69,28 +68,26 @@ async def initialize_typesense():
             'connection_timeout_seconds': 5,
             'retry_interval_seconds': 1,
             'num_retries': 3,
-            # SSL settings ko 'httpx_client_options' ke andar pass karein
             'httpx_client_options': {
                 'verify': ca_path
             }
         }
         
-        # Client banayein
         client = typesense.Client(config)
         
-        # Health check karke connection test karein
-        await run_sync(lambda: client.health.retrieve())
-        logger.info("Typesense health check OK.")
-
+        # --- FIX: Yahan se ".health" check hata diya gaya hai ---
+        # Connection check ab collection retrieve karke hi hoga
+        
         # 1. Check karein ki collection pehle se hai ya nahi
+        # Yahi asli connection check hai.
         try:
-            logger.debug(f"Checking for Typesense collection '{COLLECTION_NAME}'...")
+            logger.info(f"Checking for Typesense collection '{COLLECTION_NAME}' (This is the connection test)...")
             await run_sync(lambda: client.collections[COLLECTION_NAME].retrieve())
             logger.info(f"Typesense collection '{COLLECTION_NAME}' found.")
 
         except ObjectNotFound:
-            # 2. Agar nahi hai, toh naya banayein
-            logger.warning(f"Collection '{COLLECTION_NAME}' not found. Creating...")
+            # Connection sahi hai, lekin collection nahi mila
+            logger.warning(f"Connection OK. Collection '{COLLECTION_NAME}' not found. Creating...")
             try:
                 await run_sync(lambda: client.collections.create(movie_schema))
                 logger.info(f"Successfully created Typesense collection '{COLLECTION_NAME}'.")
@@ -109,8 +106,9 @@ async def initialize_typesense():
         return True
 
     except Exception as e:
-        logger.critical(f"Failed to initialize Typesense client: {e}", exc_info=False) # Full trace log na karein
-        logger.debug(f"Typesense init error details: {e}", exc_info=True) # Debug mein full trace
+        # Yahan "Failed to resolve" error aayega agar cold start hua
+        logger.critical(f"Failed to initialize Typesense client: {e}", exc_info=False)
+        logger.debug(f"Typesense init error details: {e}", exc_info=True)
         client = None
         _is_ready = False
         return False
@@ -122,18 +120,12 @@ async def is_typesense_ready():
     Agar nahi, toh connect karne ki koshish karein.
     """
     global _is_ready, client
-    if _is_ready and client:
-        # Connection ko ping karke check karein
-        try:
-            await run_sync(lambda: client.health.retrieve())
-            logger.debug("Typesense connection re-verified.")
-            return True
-        except Exception as e:
-            logger.warning(f"Typesense connection lost. Reconnecting... Error: {e}")
-            _is_ready = False
-            client = None
     
-    # Agar ready nahi hai, ya check fail hua hai, toh dobara connect try karein
+    # --- FIX: Yahan se bhi ".health" check hata diya gaya hai ---
+    if _is_ready and client:
+        return True
+    
+    # Agar ready nahi hai, toh dobara connect try karein
     logger.info("Typesense not ready, attempting to connect...")
     if await initialize_typesense():
         return True
@@ -144,7 +136,6 @@ async def is_typesense_ready():
 
 async def typesense_search(query: str, limit: int = 20) -> List[Dict]:
     """Typesense mein movies search karein."""
-    # is_typesense_ready() ab bot.py mein call hoga
     if not _is_ready or not client:
         logger.error("Typesense not ready for search.")
         return []
