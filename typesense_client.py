@@ -8,7 +8,7 @@ from typesense.exceptions import ObjectNotFound
 from httpx import HTTPStatusError
 from dotenv import load_dotenv
 import asyncio
-import certifi # <--- YEH HAI FIX (Step 1: Import Certifi)
+import certifi # <--- Certifi ko import karna zaroori hai
 
 load_dotenv()
 
@@ -21,7 +21,7 @@ def run_sync(func):
 TYPESENSE_API_KEY = os.getenv("TYPESENSE_API_KEY")
 TYPESENSE_HOST = os.getenv("TYPESENSE_HOST")
 TYPESENSE_PORT = os.getenv("TYPESENSE_PORT", "443")
-TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "https")
+TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "HTTPS") # Default "HTTPS" hi rakhein
 
 COLLECTION_NAME = "movies" # Collection ka naam
 
@@ -33,11 +33,11 @@ movie_schema = {
     'name': COLLECTION_NAME,
     'fields': [
         {'name': 'imdb_id', 'type': 'string', 'facet': False, 'sort': True},
-        {'name': 'title', 'type': 'string', 'facet': False, 'sort': True}, # Sortable banaya
+        {'name': 'title', 'type': 'string', 'facet': False, 'sort': True}, 
         {'name': 'clean_title', 'type': 'string', 'facet': False},
-        {'name': 'year', 'type': 'string', 'facet': True, 'optional': True, 'sort': True}, # Sortable banaya
+        {'name': 'year', 'type': 'string', 'facet': True, 'optional': True, 'sort': True}, 
     ],
-    'default_sorting_field': 'title' # Ab yeh valid hai
+    'default_sorting_field': 'title'
 }
 # === END SCHEMA ===
 
@@ -57,29 +57,36 @@ async def initialize_typesense():
     logger.info(f"Initializing Typesense client for {TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}")
     
     try:
-        # --- FIX: `nodes` aur `api_key` ko ek 'config' dict mein daalein ---
-        # typesense v1.x client ek 'config' object expect karta hai.
-        
+        # --- YEH HAI ASLI FIX (The Correct Fix) ---
+
+        # 1. Pehle certifi ka path lein
+        ca_path = certifi.where()
+        logger.info(f"Using certifi CA bundle for Typesense at: {ca_path}")
+
+        # 2. Typesense config banayein
         config = {
             'nodes': [{
                 'host': TYPESENSE_HOST,
                 'port': TYPESENSE_PORT,
-                'protocol': TYPESENSE_PROTOCOL
+                'protocol': TYPESENSE_PROTOCOL.lower() # 'https' ya 'http' hona chahiye
             }],
             'api_key': TYPESENSE_API_KEY,
             'connection_timeout_seconds': 5,
             'retry_interval_seconds': 1,
-            'num_retries': 3
+            'num_retries': 3,
+            
+            # 3. SSL settings ko 'httpx_client_options' ke andar pass karein
+            'httpx_client_options': {
+                'verify': ca_path
+            }
+            # --- END FIX ---
         }
         
-        # --- YEH HAI ASLI FIX (Step 2: Certifi ka path provide karein) ---
-        # Bilkul waise hi jaise aapne MongoDB ke liye kiya tha,
-        # hum Typesense (jo httpx ka istemal karta hai) ko SSL bundle ka path denge.
-        ca_path = certifi.where()
-        logger.info(f"Using certifi CA bundle for Typesense at: {ca_path}")
+        # 4. Client ko sirf 'config' object pass karein
+        client = typesense.Client(config)
         
-        client = typesense.Client(config, verify=ca_path) # <-- 'verify' parameter add kiya gaya
-        # --- END FIX ---
+        # --- END OF FIX ---
+
 
         # 1. Check karein ki collection pehle se hai ya nahi
         try:
