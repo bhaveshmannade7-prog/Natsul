@@ -45,12 +45,10 @@ class NeonDB:
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON movies (file_unique_id);")
                 await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_message_channel ON movies (message_id, channel_id);")
                 
-                # --- NAYA: FTS Index ---
-                # GIN index FTS search ko fast banata hai
+                # FTS Index
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_movie_search_vector ON movies USING GIN(title_search_vector);")
 
-                # --- NAYA: FTS Trigger Function ---
-                # Yeh function automatically 'title_search_vector' column ko update karega
+                # FTS Trigger Function
                 await conn.execute("""
                     CREATE OR REPLACE FUNCTION update_movie_search_vector()
                     RETURNS TRIGGER AS $$
@@ -62,8 +60,7 @@ class NeonDB:
                     $$ LANGUAGE plpgsql;
                 """)
                 
-                # --- NAYA: FTS Trigger ---
-                # Trigger ko table se jodein
+                # FTS Trigger
                 await conn.execute("""
                     DROP TRIGGER IF EXISTS ts_movie_title_update ON movies;
                     CREATE TRIGGER ts_movie_title_update
@@ -78,9 +75,18 @@ class NeonDB:
             self.pool = None # Init fail hua toh pool ko None set karein
             raise
             
-    def is_ready(self) -> bool:
-        """Check karein ki connection pool initialize hua hai ya nahi."""
-        return self.pool is not None
+    # --- FIX: Function ko 'async def' banaya gaya hai ---
+    async def is_ready(self) -> bool:
+        """Check karein ki connection pool initialize hua hai aur active hai."""
+        if self.pool is None:
+            return False
+        try:
+            # Connection ko test karne ke liye ek simple query run karein
+            async with self.pool.acquire() as conn:
+                await conn.fetchval('SELECT 1')
+            return True
+        except Exception:
+            return False
 
     async def close(self):
         """Connection pool ko close karta hai."""
@@ -90,7 +96,7 @@ class NeonDB:
 
     async def get_movie_count(self) -> int:
         """NeonDB mein total entries count karta hai."""
-        if not self.is_ready():
+        if not await self.is_ready():
             logger.error("NeonDB pool not initialized for get_movie_count.")
             return -1
         try:
@@ -103,10 +109,9 @@ class NeonDB:
 
     async def add_movie(self, message_id: int, channel_id: int, file_id: str, file_unique_id: str, imdb_id: str, title: str) -> bool:
         """NeonDB mein ek movie entry add karta hai. FTS trigger automatically index karega."""
-        if not self.is_ready(): return False
+        if not await self.is_ready(): return False
         try:
             async with self.pool.acquire() as conn:
-                # 'title' insert hoga, trigger 'title_search_vector' bana dega
                 await conn.execute(
                     """
                     INSERT INTO movies (message_id, channel_id, file_id, file_unique_id, imdb_id, title, added_date)
@@ -123,12 +128,10 @@ class NeonDB:
             logger.error(f"NeonDB add_movie error: {e}", exc_info=True)
             return False
 
-    # --- NAYA: Search Function ---
     async def neondb_search(self, query: str, limit: int = 20) -> List[Dict]:
         """NeonDB mein Full-Text Search (FTS) karta hai."""
-        if not self.is_ready(): return []
+        if not await self.is_ready(): return []
         
-        # plainto_tsquery user input (jaise "spider man 2022") ko search query ("spider & man & 2022") mein badalta hai
         search_query = """
             SELECT imdb_id, title, year
             FROM movies, plainto_tsquery('simple', $1) AS q
@@ -141,10 +144,8 @@ class NeonDB:
             async with self.pool.acquire() as conn:
                 rows = await conn.fetch(search_query, query, limit)
                 
-                # Agar FTS se kuch nahi mila, toh Trigram (LIKE) search try karein
                 if not rows:
                     logger.debug(f"Neon FTS failed for '{query}', trying trigram (LIKE) search...")
-                    # Yeh search 'Kantra' ko 'Kantara' se match kar sakta hai (agar pg_trgm enabled hai)
                     trigram_query = """
                         SELECT imdb_id, title, year
                         FROM movies
@@ -154,6 +155,7 @@ class NeonDB:
                     rows = await conn.fetch(trigram_query, query, limit)
 
                 # Results ko standard format mein convert karein
+                # Note: NeonDB table mein 'year' column nahi hai, isliye None bhej rahe hain
                 return [
                     {'imdb_id': row['imdb_id'], 'title': row['title'], 'year': None} 
                     for row in rows
@@ -169,7 +171,7 @@ class NeonDB:
         Har group mein sabse naya message (by added_date) rakhta hai aur purane delete karta hai.
         Returns: (List of (msg_id, chat_id) to delete from Telegram, total duplicates found)
         """
-        if not self.is_ready(): return ([], 0)
+        if not await self.is_ready(): return ([], 0)
         
         query = """
         WITH ranked_movies AS (
@@ -229,7 +231,7 @@ class NeonDB:
         Backup ke liye unique files ki list nikalta hai (sabse naya message_id har file ka).
         Returns: List of (message_id, channel_id)
         """
-        if not self.is_ready(): return []
+        if not await self.is_ready(): return []
         
         query = """
         SELECT DISTINCT ON (file_unique_id)
@@ -249,7 +251,7 @@ class NeonDB:
 
     async def sync_from_mongo(self, mongo_movies: List[Dict]) -> int:
         """MongoDB se data ko bulk-insert karta hai."""
-        if not self.is_ready() or not mongo_movies:
+        if not await self.is_ready() or not mongo_movies:
             return 0
             
         data_to_insert = []
@@ -278,7 +280,9 @@ class NeonDB:
             async with self.pool.acquire() as conn:
                 result = await conn.executemany(query, data_to_insert)
                 
-                inserted_count = int(result.split(" ")[-1])
+                # 'INSERT 0 123' se '123' extract karein
+                inserted_count_str = result.split(" ")[-1]
+                inserted_count = int(inserted_count_str)
                 return inserted_count
         except Exception as e:
             logger.error(f"NeonDB sync_from_mongo error: {e}", exc_info=True)
