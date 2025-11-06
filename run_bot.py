@@ -11,38 +11,40 @@ if replit_domain and not os.getenv("PUBLIC_URL"):
 # === START DEBUGGING ===
 print("="*30)
 print("DEBUGGING ENVIRONMENT VARIABLES:")
-ts_host = os.getenv("TYPESENSE_HOST")
-ts_port = os.getenv("TYPESENSE_PORT")
-ts_proto = os.getenv("TYPESENSE_PROTOCOL")
-ts_key_exists = "SET" if os.getenv("TYPESENSE_API_KEY") else "NOT SET"
 
-# Log values ko 'single quotes' mein print karein taaki extra space dikh jaaye
-print(f"TYPESENSE_HOST: '{ts_host}'")
-print(f"TYPESENSE_PORT: '{ts_port}'")
-print(f"TYPESENSE_PROTOCOL: '{ts_proto}'")
-print(f"TYPESENSE_API_KEY is: {ts_key_exists}")
+# --- Sabhi critical variables ko check karein ---
+config = {
+    "BOT_TOKEN": os.getenv("BOT_TOKEN"),
+    "ADMIN_USER_ID": os.getenv("ADMIN_USER_ID"),
+    "DATABASE_URL": os.getenv("DATABASE_URL"),
+    "NEON_DATABASE_URL": os.getenv("NEON_DATABASE_URL"),
+    "TYPESENSE_HOST": os.getenv("TYPESENSE_HOST"),
+    "TYPESENSE_PORT": os.getenv("TYPESENSE_PORT"),
+    "TYPESENSE_PROTOCOL": os.getenv("TYPESENSE_PROTOCOL"),
+    "TYPESENSE_API_KEY": os.getenv("TYPESENSE_API_KEY")
+}
 
-if not ts_host:
-    print("CRITICAL: TYPESENSE_HOST environment variable is NOT SET.")
-else:
-    # Aam galtiyon ko check karein
-    if ' ' in ts_host:
-        print("CRITICAL: TYPESENSE_HOST mein extra space hai!")
-    if 'https://' in ts_host:
-        print("CRITICAL: TYPESENSE_HOST mein 'https://' nahi hona chahiye!")
-    if ':' in ts_host:
-        print("CRITICAL: TYPESENSE_HOST mein port number (jaise ':443') nahi hona chahiye!")
+all_set = True
+for key, value in config.items():
+    if value:
+        # Passwords/keys ko log mein na dikhayein
+        if "TOKEN" in key or "KEY" in key or "URL" in key:
+            print(f"✅ {key}: SET (Hidden)")
+        else:
+            print(f"✅ {key}: '{value}'")
+    else:
+        print(f"❌ CRITICAL: {key} environment variable is NOT SET.")
+        all_set = False
 
 print("="*30)
 # === END DEBUGGING ===
 
 # Render $PORT environment variable ka istemal karein.
-# 5000 ko default fallback rakhein local testing ke liye.
-port = os.getenv("PORT", "10000") # Render ke free tier ke liye 10000 set karein
+port = os.getenv("PORT", "10000")
 
 print(f"✅ Starting Uvicorn on host 0.0.0.0, port {port}...")
 
-# Uvicorn command ko port variable use karne ke liye update karein
+# Uvicorn command
 subprocess.run([
     sys.executable,
     "-m", "uvicorn",
