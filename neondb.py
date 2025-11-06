@@ -283,12 +283,13 @@ class NeonDB:
         
         try:
             async with self.pool.acquire() as conn:
-                result = await conn.executemany(query, data_to_insert)
+                # --- FIX: `executemany` 'None' return karta hai. ---
+                # Hum result ko parse nahi kar sakte.
+                await conn.executemany(query, data_to_insert)
                 
-                # 'INSERT 0 123' se '123' extract karein
-                inserted_count_str = result.split(" ")[-1]
-                inserted_count = int(inserted_count_str)
-                return inserted_count
+                # Hum bas 'processed' count return karenge.
+                processed_count = len(data_to_insert)
+                return processed_count
         except Exception as e:
             logger.error(f"NeonDB sync_from_mongo error: {e}", exc_info=True)
             return 0
