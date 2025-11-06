@@ -75,13 +75,11 @@ class NeonDB:
             self.pool = None # Init fail hua toh pool ko None set karein
             raise
             
-    # --- FIX: Function ko 'async def' banaya gaya hai ---
     async def is_ready(self) -> bool:
         """Check karein ki connection pool initialize hua hai aur active hai."""
         if self.pool is None:
             return False
         try:
-            # Connection ko test karne ke liye ek simple query run karein
             async with self.pool.acquire() as conn:
                 await conn.fetchval('SELECT 1')
             return True
@@ -256,18 +254,25 @@ class NeonDB:
             
         data_to_insert = []
         for movie in mongo_movies:
-            if 'file_unique_id' in movie:
-                data_to_insert.append((
-                    movie.get('message_id'),
-                    movie.get('channel_id'),
-                    movie.get('file_id'),
-                    movie.get('file_unique_id'),
-                    movie.get('imdb_id'),
-                    movie.get('title')
-                ))
+            # --- FIX: Agar 'file_unique_id' nahi hai, toh 'file_id' ko fallback ki tarah use karein ---
+            unique_id_for_db = movie.get('file_unique_id') or movie.get('file_id')
+            
+            # Agar dono nahi hain, toh skip karein
+            if not unique_id_for_db or not movie.get('file_id'):
+                logger.warning(f"NeonDB Sync: Skipping movie (no unique_id or file_id): {movie.get('title')}")
+                continue
+
+            data_to_insert.append((
+                movie.get('message_id'),
+                movie.get('channel_id'),
+                movie.get('file_id'),
+                unique_id_for_db, # Yahan fallback value use hogi
+                movie.get('imdb_id'),
+                movie.get('title')
+            ))
 
         if not data_to_insert:
-            logger.warning("NeonDB Sync: Mongo data mein file_unique_id nahi mila.")
+            logger.warning("NeonDB Sync: Mongo data se koi valid entry nahi mili (ho sakta hai file_id bhi missing ho).")
             return 0
             
         query = """
