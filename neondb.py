@@ -1,10 +1,9 @@
-# neondb.py
-import logging
+# -*- coding: utf-8 -*-
 import os
-import asyncio
+import logging
 import asyncpg
-from typing import List, Dict, Tuple
-from datetime import datetime, timezone
+import re
+from typing import List, Tuple, Dict, Any
 
 logger = logging.getLogger("bot.neondb")
 
@@ -14,282 +13,218 @@ class NeonDB:
         self.pool = None
 
     async def init_db(self):
-        """Connection pool banata hai aur FTS features ke saath table ensure karta hai."""
+        """Initializes the connection pool and schema."""
+        if not self.database_url:
+            logger.warning("NEON_DATABASE_URL is not set.")
+            return
+
         try:
             self.pool = await asyncpg.create_pool(
-                self.database_url,
+                dsn=self.database_url,
                 min_size=1,
                 max_size=10,
-                command_timeout=60
+                command_timeout=10
             )
+            
             async with self.pool.acquire() as conn:
-                # Full-Text Search ke liye extension (fuzzy matching ke liye)
-                await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
-                
-                # Table create karein
+                # 1. Create Table if not exists
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS movies (
-                        id SERIAL PRIMARY KEY,
-                        message_id BIGINT NOT NULL,
-                        channel_id BIGINT NOT NULL,
-                        file_id TEXT NOT NULL,
-                        file_unique_id TEXT NOT NULL,
-                        imdb_id TEXT,
-                        title TEXT,
-                        added_date TIMESTAMPTZ DEFAULT NOW(),
-                        title_search_vector TSVECTOR -- FTS ke liye naya column
+                        imdb_id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        year TEXT,
+                        message_id BIGINT,
+                        channel_id BIGINT,
+                        file_id TEXT,
+                        file_unique_id TEXT,
+                        search_text TSVECTOR
                     );
                 """)
                 
-                # Indexes
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON movies (file_unique_id);")
-                await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_message_channel ON movies (message_id, channel_id);")
-                
-                # FTS Index
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_movie_search_vector ON movies USING GIN(title_search_vector);")
-
-                # FTS Trigger Function
+                # 2. Create Index for Fast Search
                 await conn.execute("""
-                    CREATE OR REPLACE FUNCTION update_movie_search_vector()
-                    RETURNS TRIGGER AS $$
-                    BEGIN
-                        NEW.title_search_vector :=
-                            to_tsvector('simple', COALESCE(NEW.title, ''));
-                        RETURN NEW;
-                    END;
-                    $$ LANGUAGE plpgsql;
+                    CREATE INDEX IF NOT EXISTS idx_movies_search_text ON movies USING GIN(search_text);
                 """)
                 
-                # FTS Trigger
-                await conn.execute("""
-                    DROP TRIGGER IF EXISTS ts_movie_title_update ON movies;
-                    CREATE TRIGGER ts_movie_title_update
-                    BEFORE INSERT OR UPDATE ON movies
-                    FOR EACH ROW
-                    EXECUTE FUNCTION update_movie_search_vector();
-                """)
+                # 3. CRITICAL FIX: Check if 'year' column exists, if not, ADD IT.
+                # This handles the migration for existing 9000+ movies database
+                try:
+                    await conn.execute("""
+                        ALTER TABLE movies ADD COLUMN IF NOT EXISTS year TEXT;
+                    """)
+                    logger.info("Schema Check: 'year' column ensured.")
+                except Exception as e:
+                    logger.warning(f"Schema Migration Warning: {e}")
 
-            logger.info("NeonDB (Postgres) connection pool, table, and FTS triggers initialized.")
+            logger.info("NeonDB (Postgres) initialized successfully.")
         except Exception as e:
-            logger.critical(f"Failed to initialize NeonDB pool: {e}", exc_info=True)
-            self.pool = None # Init fail hua toh pool ko None set karein
-            raise
-            
+            logger.critical(f"Failed to initialize NeonDB: {e}", exc_info=True)
+            self.pool = None
+
     async def is_ready(self) -> bool:
-        """Check karein ki connection pool initialize hua hai aur active hai."""
-        if self.pool is None:
-            return False
-        try:
-            async with self.pool.acquire() as conn:
-                await conn.fetchval('SELECT 1')
-            return True
-        except Exception:
-            return False
+        return self.pool is not None
 
     async def close(self):
-        """Connection pool ko close karta hai."""
         if self.pool:
             await self.pool.close()
-            logger.info("NeonDB (Postgres) pool closed.")
+            logger.info("NeonDB pool closed.")
 
-    async def get_movie_count(self) -> int:
-        """NeonDB mein total entries count karta hai."""
-        if not await self.is_ready():
-            logger.error("NeonDB pool not initialized for get_movie_count.")
-            return -1
+    async def add_movie(self, message_id: int, channel_id: int, file_id: str, file_unique_id: str, imdb_id: str, title: str, year: str = None) -> bool:
+        """Adds or updates a movie in NeonDB."""
+        if not self.pool: return False
         try:
+            # Clean text for TSVECTOR search
+            clean_title = re.sub(r"[^a-zA-Z0-9\s]", " ", title).strip()
+            
+            query = """
+                INSERT INTO movies (imdb_id, title, year, message_id, channel_id, file_id, file_unique_id, search_text)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, to_tsvector('english', $8))
+                ON CONFLICT (imdb_id) DO UPDATE 
+                SET title = $2,
+                    year = $3,
+                    message_id = $4,
+                    channel_id = $5,
+                    file_id = $6,
+                    file_unique_id = $7,
+                    search_text = to_tsvector('english', $8);
+            """
             async with self.pool.acquire() as conn:
-                count = await conn.fetchval("SELECT COUNT(*) FROM movies")
-                return count
-        except Exception as e:
-            logger.error(f"NeonDB get_movie_count error: {e}", exc_info=True)
-            return -1
-
-    async def add_movie(self, message_id: int, channel_id: int, file_id: str, file_unique_id: str, imdb_id: str, title: str) -> bool:
-        """NeonDB mein ek movie entry add karta hai. FTS trigger automatically index karega."""
-        if not await self.is_ready(): return False
-        try:
-            async with self.pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    INSERT INTO movies (message_id, channel_id, file_id, file_unique_id, imdb_id, title, added_date)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (message_id, channel_id) DO NOTHING
-                    """,
-                    message_id, channel_id, file_id, file_unique_id, imdb_id, title, datetime.now(timezone.utc)
-                )
+                await conn.execute(query, imdb_id, title, year, message_id, channel_id, file_id, file_unique_id, clean_title)
             return True
-        except asyncpg.exceptions.UniqueViolationError:
-            logger.warning(f"NeonDB: Message {message_id} pehle se exists hai (UniqueViolation).")
-            return False
         except Exception as e:
-            logger.error(f"NeonDB add_movie error: {e}", exc_info=True)
+            logger.error(f"NeonDB add_movie error: {e}")
             return False
 
     async def neondb_search(self, query: str, limit: int = 20) -> List[Dict]:
-        """NeonDB mein Full-Text Search (FTS) karta hai."""
-        if not await self.is_ready(): return []
-        
-        search_query = """
-            SELECT imdb_id, title, year
-            FROM movies, plainto_tsquery('simple', $1) AS q
-            WHERE title_search_vector @@ q
-            ORDER BY ts_rank(title_search_vector, q) DESC
-            LIMIT $2;
-        """
-        
+        """Full-text search using Postgres TSVECTOR."""
+        if not self.pool: return []
         try:
-            async with self.pool.acquire() as conn:
-                rows = await conn.fetch(search_query, query, limit)
-                
-                if not rows:
-                    logger.debug(f"Neon FTS failed for '{query}', trying trigram (LIKE) search...")
-                    trigram_query = """
-                        SELECT imdb_id, title, year
-                        FROM movies
-                        ORDER BY similarity(title, $1) DESC
-                        LIMIT $2;
-                    """
-                    rows = await conn.fetch(trigram_query, query, limit)
+            # Clean query for tsquery
+            clean_q = re.sub(r"[^a-zA-Z0-9\s]", " ", query).strip().replace(" ", " & ")
+            if not clean_q: return []
 
-                # Results ko standard format mein convert karein
-                # Note: NeonDB table mein 'year' column nahi hai, isliye None bhej rahe hain
-                return [
-                    {'imdb_id': row['imdb_id'], 'title': row['title'], 'year': None} 
-                    for row in rows
-                ]
+            # Fix: Explicitly select 'year' column
+            search_sql = """
+                SELECT imdb_id, title, year
+                FROM movies
+                WHERE search_text @@ to_tsquery('english', $1)
+                LIMIT $2;
+            """
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(search_sql, f"{clean_q}:*", limit)
+                
+            return [
+                {'imdb_id': r['imdb_id'], 'title': r['title'], 'year': r['year']} 
+                for r in rows
+            ]
         except Exception as e:
             logger.error(f"NeonDB neondb_search error for '{query}': {e}", exc_info=True)
             return []
 
+    async def get_movie_count(self) -> int:
+        if not self.pool: return -1
+        try:
+            async with self.pool.acquire() as conn:
+                return await conn.fetchval("SELECT COUNT(*) FROM movies;")
+        except:
+            return -1
 
-    async def find_and_delete_duplicates(self, batch_limit: int) -> Tuple[List[Tuple[int, int]], int]:
-        """
-        file_unique_id ke basis par duplicates dhoondta hai.
-        Har group mein sabse naya message (by added_date) rakhta hai aur purane delete karta hai.
-        Returns: (List of (msg_id, chat_id) to delete from Telegram, total duplicates found)
-        """
-        if not await self.is_ready(): return ([], 0)
+    async def sync_from_mongo(self, movies_list: List[Dict]) -> int:
+        """Bulk insert/update from MongoDB data."""
+        if not self.pool or not movies_list: return 0
         
+        # Prepare data format matching the updated schema (with year)
+        # Expecting list of dicts or tuples. Let's standardize to list of tuples.
+        # (imdb_id, title, year, message_id, channel_id, file_id, file_unique_id, search_text_source)
+        
+        data_tuples = []
+        for m in movies_list:
+            # Handle both dict (from mongo sync) or tuple (from import_json)
+            if isinstance(m, dict):
+                t_imdb = m.get('imdb_id')
+                t_title = m.get('title')
+                t_year = m.get('year')
+                t_mid = m.get('message_id')
+                t_cid = m.get('channel_id')
+                t_fid = m.get('file_id')
+                t_uid = m.get('file_unique_id')
+            else:
+                # Fallback if tuple (old logic compatibility)
+                # (message_id, channel_id, file_id, file_unique_id, imdb_id, title) - Old format usually didn't have year
+                # We strongly recommend passing dicts now.
+                continue
+
+            if t_imdb and t_title:
+                clean_t = re.sub(r"[^a-zA-Z0-9\s]", " ", t_title).strip()
+                data_tuples.append((
+                    t_imdb, t_title, t_year, t_mid, t_cid, t_fid, t_uid, clean_t
+                ))
+
+        if not data_tuples: return 0
+
         query = """
-        WITH ranked_movies AS (
-            SELECT
-                id,
-                message_id,
-                channel_id,
-                file_unique_id,
-                added_date,
-                ROW_NUMBER() OVER(PARTITION BY file_unique_id ORDER BY added_date DESC, message_id DESC) as rn
-            FROM movies
-        ),
-        to_delete AS (
-            SELECT id, message_id, channel_id
-            FROM ranked_movies
-            WHERE rn > 1
-        ),
-        total_duplicates AS (
-            SELECT COUNT(*) as total_count FROM to_delete
-        )
-        SELECT 
-            (SELECT total_count FROM total_duplicates), 
-            array_agg(t.id) as ids_to_delete_db,
-            array_agg(ARRAY[t.message_id, t.channel_id]) as messages_to_delete_tg
-        FROM (
-            SELECT * FROM to_delete LIMIT $1
-        ) t;
+            INSERT INTO movies (imdb_id, title, year, message_id, channel_id, file_id, file_unique_id, search_text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, to_tsvector('english', $8))
+            ON CONFLICT (imdb_id) DO NOTHING;
         """
         
         try:
             async with self.pool.acquire() as conn:
-                result = await conn.fetchrow(query, batch_limit)
-                
-                if not result or not result['ids_to_delete_db']:
-                    return ([], 0)
-
-                total_duplicates_found = result['total_count']
-                db_ids_to_delete = result['ids_to_delete_db']
-                tg_messages_to_delete = [tuple(msg) for msg in result['messages_to_delete_tg']]
-
-                if not db_ids_to_delete:
-                    return ([], 0)
-
-                async with conn.transaction():
-                    await conn.execute("DELETE FROM movies WHERE id = ANY($1)", db_ids_to_delete)
-                
-                logger.info(f"NeonDB: Cleaned up {len(db_ids_to_delete)} duplicate entries from NeonDB.")
-                
-                return (tg_messages_to_delete, total_duplicates_found)
-                
+                await conn.executemany(query, data_tuples)
+            return len(data_tuples)
         except Exception as e:
-            logger.error(f"NeonDB find_and_delete_duplicates error: {e}", exc_info=True)
+            logger.error(f"NeonDB Sync Error: {e}")
+            return 0
+
+    # --- Backup/Library Cleanup Helpers ---
+    async def find_and_delete_duplicates(self, batch_limit: int = 100) -> Tuple[List[Tuple[int, int]], int]:
+        if not self.pool: return ([], 0)
+        try:
+            # Find file_unique_ids that appear more than once
+            async with self.pool.acquire() as conn:
+                duplicates = await conn.fetch("""
+                    SELECT file_unique_id, COUNT(*) 
+                    FROM movies 
+                    GROUP BY file_unique_id 
+                    HAVING COUNT(*) > 1
+                """)
+                
+                total_duplicates = sum([r['count'] - 1 for r in duplicates])
+                to_delete = []
+
+                for row in duplicates:
+                    fid = row['file_unique_id']
+                    # Get all entries for this file, order by message_id desc (keep newest or oldest? Let's keep oldest usually, but here strictly duplicate removal)
+                    entries = await conn.fetch("""
+                        SELECT message_id, channel_id 
+                        FROM movies 
+                        WHERE file_unique_id = $1 
+                        ORDER BY message_id DESC
+                    """, fid)
+                    
+                    # Keep the first one (latest), delete the rest? Or Keep oldest? 
+                    # Let's keep the one with the highest message_id (newest) as 'valid' usually implies re-upload, 
+                    # BUT for library cleanup we usually want to keep ONE valid copy.
+                    # Logic: Keep the one that matches the Primary DB. 
+                    # Simple Logic: Delete all except one.
+                    
+                    for e in entries[1:]: # Skip the first one
+                        to_delete.append((e['message_id'], e['channel_id']))
+                        if len(to_delete) >= batch_limit: break
+                    if len(to_delete) >= batch_limit: break
+                
+                return to_delete, total_duplicates
+        except Exception as e:
+            logger.error(f"NeonDB find_duplicates error: {e}")
             return ([], 0)
 
     async def get_unique_movies_for_backup(self) -> List[Tuple[int, int]]:
-        """
-        Backup ke liye unique files ki list nikalta hai (sabse naya message_id har file ka).
-        Returns: List of (message_id, channel_id)
-        """
-        if not await self.is_ready(): return []
-        
-        query = """
-        SELECT DISTINCT ON (file_unique_id)
-            message_id,
-            channel_id
-        FROM movies
-        ORDER BY file_unique_id, added_date DESC, message_id DESC;
-        """
-        
+        if not self.pool: return []
         try:
             async with self.pool.acquire() as conn:
-                rows = await conn.fetch(query)
-                return [(row['message_id'], row['channel_id']) for row in rows]
+                # Select distinct files
+                rows = await conn.fetch("SELECT DISTINCT ON (file_unique_id) message_id, channel_id FROM movies;")
+                return [(r['message_id'], r['channel_id']) for r in rows]
         except Exception as e:
-            logger.error(f"NeonDB get_unique_movies_for_backup error: {e}", exc_info=True)
+            logger.error(f"NeonDB backup fetch error: {e}")
             return []
-
-    async def sync_from_mongo(self, mongo_movies: List[Dict]) -> int:
-        """MongoDB se data ko bulk-insert karta hai."""
-        if not await self.is_ready() or not mongo_movies:
-            return 0
-            
-        data_to_insert = []
-        for movie in mongo_movies:
-            # --- FIX: Agar 'file_unique_id' nahi hai, toh 'file_id' ko fallback ki tarah use karein ---
-            unique_id_for_db = movie.get('file_unique_id') or movie.get('file_id')
-            
-            # Agar dono nahi hain, toh skip karein
-            if not unique_id_for_db or not movie.get('file_id'):
-                logger.warning(f"NeonDB Sync: Skipping movie (no unique_id or file_id): {movie.get('title')}")
-                continue
-
-            data_to_insert.append((
-                movie.get('message_id'),
-                movie.get('channel_id'),
-                movie.get('file_id'),
-                unique_id_for_db, # Yahan fallback value use hogi
-                movie.get('imdb_id'),
-                movie.get('title')
-            ))
-
-        if not data_to_insert:
-            logger.warning("NeonDB Sync: Mongo data se koi valid entry nahi mili (ho sakta hai file_id bhi missing ho).")
-            return 0
-            
-        query = """
-        INSERT INTO movies (message_id, channel_id, file_id, file_unique_id, imdb_id, title)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (message_id, channel_id) DO NOTHING
-        """
-        
-        try:
-            async with self.pool.acquire() as conn:
-                # --- FIX: `executemany` 'None' return karta hai. ---
-                # Hum result ko parse nahi kar sakte.
-                await conn.executemany(query, data_to_insert)
-                
-                # Hum bas 'processed' count return karenge.
-                processed_count = len(data_to_insert)
-                return processed_count
-        except Exception as e:
-            logger.error(f"NeonDB sync_from_mongo error: {e}", exc_info=True)
-            return 0
