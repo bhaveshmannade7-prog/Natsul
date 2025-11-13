@@ -38,7 +38,7 @@ class SecondaryDB:
                 await self.client.admin.command('ping')
                 return True
             except Exception:
-                self.client = None # Reconnect if ping fails
+                self.client = None 
 
         try:
             logger.info("Connecting to Secondary MongoDB...")
@@ -51,14 +51,11 @@ class SecondaryDB:
             )
             await self.client.admin.command('ping')
             
-            # Database name can be same as main or different. Using 'MovieBotSecondary' to be safe.
             self.db = self.client["MovieBotSecondary"] 
             self.movies = self.db["movies"]
             
-            # Create Indexes immediately
-            # Text index for search
+            # Create Indexes
             await self.movies.create_index([("clean_title", "text"), ("title", "text")])
-            # Unique ID index
             await self.movies.create_index("imdb_id", unique=True)
             
             logger.info("Connected to Secondary MongoDB.")
@@ -78,7 +75,7 @@ class SecondaryDB:
             return False
 
     async def search_movies(self, query: str, limit: int = 20) -> List[Dict]:
-        """Fast text search on Secondary DB (Replacement for Typesense search)."""
+        """Fast text search on Secondary DB."""
         if not await self.is_ready():
             await self._connect()
             if not await self.is_ready():
@@ -88,7 +85,7 @@ class SecondaryDB:
             clean_query = clean_text_for_search(query)
             if not clean_query: return []
 
-            # Priority 1: Text Search (Faster)
+            # Priority 1: Text Search
             cursor = self.movies.find(
                 { "$text": { "$search": clean_query } },
                 { "score": { "$meta": "textScore" } }
@@ -102,7 +99,7 @@ class SecondaryDB:
                     'year': movie.get('year', 'N/A')
                 })
 
-            # Priority 2: Regex Fallback (Slower but finds partial matches)
+            # Priority 2: Regex Fallback
             if not results and len(clean_query) > 2:
                 regex_query = re.compile(clean_query, re.IGNORECASE)
                 cursor_regex = self.movies.find(
@@ -149,7 +146,7 @@ class SecondaryDB:
             return False
 
     async def add_batch_movies(self, movies_list: List[Dict]) -> bool:
-        """Adds multiple movies at once (For Import JSON / Sync)."""
+        """Adds multiple movies at once."""
         if not await self.is_ready(): await self._connect()
         if not movies_list: return True
         
