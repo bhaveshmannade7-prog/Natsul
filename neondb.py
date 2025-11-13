@@ -13,7 +13,7 @@ class NeonDB:
         self.pool = None
 
     async def init_db(self):
-        """Initializes the connection pool and schema."""
+        """Initializes the connection pool and updates schema automatically."""
         if not self.database_url:
             logger.warning("NEON_DATABASE_URL is not set.")
             return
@@ -27,7 +27,7 @@ class NeonDB:
             )
             
             async with self.pool.acquire() as conn:
-                # 1. Create Table if not exists
+                # 1. Try creating table (For fresh installs)
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS movies (
                         imdb_id TEXT PRIMARY KEY,
@@ -41,22 +41,28 @@ class NeonDB:
                     );
                 """)
                 
-                # 2. Create Index for Fast Search
-                await conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_movies_search_text ON movies USING GIN(search_text);
-                """)
-                
-                # 3. CRITICAL FIX: Check if 'year' column exists, if not, ADD IT.
-                # This handles the migration for existing 9000+ movies database
+                # 2. CRITICAL FIX: Auto-add 'search_text' column if missing (For existing DBs)
+                try:
+                    await conn.execute("""
+                        ALTER TABLE movies ADD COLUMN IF NOT EXISTS search_text TSVECTOR;
+                    """)
+                except Exception as e:
+                    logger.debug(f"Migration (search_text) note: {e}")
+
+                # 3. CRITICAL FIX: Auto-add 'year' column if missing (For existing DBs)
                 try:
                     await conn.execute("""
                         ALTER TABLE movies ADD COLUMN IF NOT EXISTS year TEXT;
                     """)
-                    logger.info("Schema Check: 'year' column ensured.")
                 except Exception as e:
-                    logger.warning(f"Schema Migration Warning: {e}")
-
-            logger.info("NeonDB (Postgres) initialized successfully.")
+                    logger.debug(f"Migration (year) note: {e}")
+                
+                # 4. Now it is safe to create the Index
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_movies_search_text ON movies USING GIN(search_text);
+                """)
+                
+            logger.info("NeonDB (Postgres) initialized & Migrated successfully.")
         except Exception as e:
             logger.critical(f"Failed to initialize NeonDB: {e}", exc_info=True)
             self.pool = None
@@ -75,6 +81,7 @@ class NeonDB:
         try:
             # Clean text for TSVECTOR search
             clean_title = re.sub(r"[^a-zA-Z0-9\s]", " ", title).strip()
+            if not clean_title: clean_title = "untitled"
             
             query = """
                 INSERT INTO movies (imdb_id, title, year, message_id, channel_id, file_id, file_unique_id, search_text)
@@ -100,10 +107,13 @@ class NeonDB:
         if not self.pool: return []
         try:
             # Clean query for tsquery
-            clean_q = re.sub(r"[^a-zA-Z0-9\s]", " ", query).strip().replace(" ", " & ")
+            clean_q = re.sub(r"[^a-zA-Z0-9\s]", " ", query).strip()
             if not clean_q: return []
-
-            # Fix: Explicitly select 'year' column
+            
+            # Join terms with & for AND search logic
+            ts_query_str = " & ".join(clean_q.split()) + ":*"
+            
+            # Fix: Select 'year' safely
             search_sql = """
                 SELECT imdb_id, title, year
                 FROM movies
@@ -111,7 +121,7 @@ class NeonDB:
                 LIMIT $2;
             """
             async with self.pool.acquire() as conn:
-                rows = await conn.fetch(search_sql, f"{clean_q}:*", limit)
+                rows = await conn.fetch(search_sql, ts_query_str, limit)
                 
             return [
                 {'imdb_id': r['imdb_id'], 'title': r['title'], 'year': r['year']} 
@@ -133,13 +143,9 @@ class NeonDB:
         """Bulk insert/update from MongoDB data."""
         if not self.pool or not movies_list: return 0
         
-        # Prepare data format matching the updated schema (with year)
-        # Expecting list of dicts or tuples. Let's standardize to list of tuples.
-        # (imdb_id, title, year, message_id, channel_id, file_id, file_unique_id, search_text_source)
-        
         data_tuples = []
         for m in movies_list:
-            # Handle both dict (from mongo sync) or tuple (from import_json)
+            # Handle dict input
             if isinstance(m, dict):
                 t_imdb = m.get('imdb_id')
                 t_title = m.get('title')
@@ -149,13 +155,11 @@ class NeonDB:
                 t_fid = m.get('file_id')
                 t_uid = m.get('file_unique_id')
             else:
-                # Fallback if tuple (old logic compatibility)
-                # (message_id, channel_id, file_id, file_unique_id, imdb_id, title) - Old format usually didn't have year
-                # We strongly recommend passing dicts now.
                 continue
 
             if t_imdb and t_title:
                 clean_t = re.sub(r"[^a-zA-Z0-9\s]", " ", t_title).strip()
+                if not clean_t: clean_t = "untitled"
                 data_tuples.append((
                     t_imdb, t_title, t_year, t_mid, t_cid, t_fid, t_uid, clean_t
                 ))
@@ -165,7 +169,14 @@ class NeonDB:
         query = """
             INSERT INTO movies (imdb_id, title, year, message_id, channel_id, file_id, file_unique_id, search_text)
             VALUES ($1, $2, $3, $4, $5, $6, $7, to_tsvector('english', $8))
-            ON CONFLICT (imdb_id) DO NOTHING;
+            ON CONFLICT (imdb_id) DO UPDATE 
+            SET title = EXCLUDED.title,
+                year = EXCLUDED.year,
+                message_id = EXCLUDED.message_id,
+                channel_id = EXCLUDED.channel_id,
+                file_id = EXCLUDED.file_id,
+                file_unique_id = EXCLUDED.file_unique_id,
+                search_text = EXCLUDED.search_text;
         """
         
         try:
@@ -180,7 +191,6 @@ class NeonDB:
     async def find_and_delete_duplicates(self, batch_limit: int = 100) -> Tuple[List[Tuple[int, int]], int]:
         if not self.pool: return ([], 0)
         try:
-            # Find file_unique_ids that appear more than once
             async with self.pool.acquire() as conn:
                 duplicates = await conn.fetch("""
                     SELECT file_unique_id, COUNT(*) 
@@ -194,7 +204,6 @@ class NeonDB:
 
                 for row in duplicates:
                     fid = row['file_unique_id']
-                    # Get all entries for this file, order by message_id desc (keep newest or oldest? Let's keep oldest usually, but here strictly duplicate removal)
                     entries = await conn.fetch("""
                         SELECT message_id, channel_id 
                         FROM movies 
@@ -202,13 +211,7 @@ class NeonDB:
                         ORDER BY message_id DESC
                     """, fid)
                     
-                    # Keep the first one (latest), delete the rest? Or Keep oldest? 
-                    # Let's keep the one with the highest message_id (newest) as 'valid' usually implies re-upload, 
-                    # BUT for library cleanup we usually want to keep ONE valid copy.
-                    # Logic: Keep the one that matches the Primary DB. 
-                    # Simple Logic: Delete all except one.
-                    
-                    for e in entries[1:]: # Skip the first one
+                    for e in entries[1:]: 
                         to_delete.append((e['message_id'], e['channel_id']))
                         if len(to_delete) >= batch_limit: break
                     if len(to_delete) >= batch_limit: break
@@ -222,7 +225,6 @@ class NeonDB:
         if not self.pool: return []
         try:
             async with self.pool.acquire() as conn:
-                # Select distinct files
                 rows = await conn.fetch("SELECT DISTINCT ON (file_unique_id) message_id, channel_id FROM movies;")
                 return [(r['message_id'], r['channel_id']) for r in rows]
         except Exception as e:
