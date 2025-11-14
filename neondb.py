@@ -50,7 +50,12 @@ class NeonDB:
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON movies (file_unique_id);")
                 await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_message_channel ON movies (message_id, channel_id);")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_movie_search_vector ON movies USING GIN(title_search_vector);")
-                await conn.execute("CREATE INDEX IF NOT EXISTS idx_imdb_id ON movies (imdb_id);") # remove_movie ke liye
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_imdb_id ON movies (imdb_id);")
+                
+                # --- Fuzzy Search ke liye Trigram Index ---
+                # Yeh 'title % $1' query ko tez banata hai
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_title_trgm ON movies USING GIN (title gin_trgm_ops);")
+
 
                 await conn.execute("""
                     CREATE OR REPLACE FUNCTION update_movie_search_vector()
@@ -71,7 +76,7 @@ class NeonDB:
                     EXECUTE FUNCTION update_movie_search_vector();
                 """)
 
-            logger.info("NeonDB (Postgres) connection pool, table, aur FTS initialize ho gaya.")
+            logger.info("NeonDB (Postgres) connection pool, table, aur FTS/Trigram initialize ho gaya.")
         except Exception as e:
             logger.critical(f"NeonDB pool initialize nahi ho paya: {e}", exc_info=True)
             self.pool = None
@@ -120,7 +125,6 @@ class NeonDB:
             return False
         try:
             async with self.pool.acquire() as conn:
-                # message_id + channel_id par conflict check karein
                 await conn.execute(
                     """
                     INSERT INTO movies (message_id, channel_id, file_id, file_unique_id, imdb_id, title, added_date)
@@ -143,14 +147,11 @@ class NeonDB:
             return False
 
     async def remove_movie_by_imdb(self, imdb_id: str) -> bool:
-        """IMDB ID se judi sabhi entries ko NeonDB se delete karta hai."""
         if not await self.is_ready(): 
             return False
         try:
             async with self.pool.acquire() as conn:
-                # Yahan hum 'imdb_id' par index ka istemal kar rahe hain
                 result = await conn.execute("DELETE FROM movies WHERE imdb_id = $1", imdb_id)
-                # result string 'DELETE 5' jaisa hota hai
                 deleted_count = int(result.split()[-1]) if result else 0
                 return deleted_count > 0
         except Exception as e:
@@ -158,52 +159,58 @@ class NeonDB:
             return False
 
     async def neondb_search(self, query: str, limit: int = 20) -> List[Dict]:
+        """
+        --- NAYA FUZZY SEARCH LOGIC ---
+        Trigram (similarity) ko FTS (full-text) par prathmikta deta hai.
+        """
         if not await self.is_ready(): 
             logger.error("NeonDB pool (neondb_search) ready nahi hai.")
             return []
         
         results = []
         
-        # 1. Koshish: Full-Text Search (FTS)
-        search_query_fts = """
-            SELECT imdb_id, title, ts_rank(title_search_vector, query) as rank
-            FROM movies, websearch_to_tsquery('simple', $1) AS query
-            WHERE title_search_vector @@ query
-            ORDER BY rank DESC
+        # 1. Koshish: Trigram (pg_trgm) Search (Fuzzy 'LIKE' typos ke liye)
+        # Yeh 'Katra' ko 'Kantara' se match karega
+        trigram_query = """
+            SELECT imdb_id, title, similarity(title, $1) AS sml
+            FROM movies
+            WHERE title % $1
+            AND similarity(title, $1) > 0.25  -- Typo ke liye threshold (0.25 theek hai)
+            ORDER BY sml DESC, title
             LIMIT $2;
         """
         
         try:
             async with self.pool.acquire() as conn:
-                rows_fts = await conn.fetch(search_query_fts, query, limit)
-                if rows_fts:
-                    results = [
-                        {'imdb_id': row['imdb_id'], 'title': row['title'], 'year': None} 
-                        for row in rows_fts
-                    ]
-        except Exception as e:
-            logger.warning(f"NeonDB FTS search fail hua '{query}': {e}")
-            results = []
-
-        # 2. Fallback: Trigram (pg_trgm) Search (Fuzzy 'LIKE')
-        if not results:
-            logger.debug(f"Neon FTS fail hua '{query}', ab trigram (similarity) search...")
-            trigram_query = """
-                SELECT imdb_id, title, similarity(title, $1) AS sml
-                FROM movies
-                WHERE title % $1
-                ORDER BY sml DESC, title
-                LIMIT $2;
-            """
-            try:
-                 async with self.pool.acquire() as conn:
-                    rows_trg = await conn.fetch(trigram_query, query, limit)
+                rows_trg = await conn.fetch(trigram_query, query, limit)
+                if rows_trg:
                     results = [
                         {'imdb_id': row['imdb_id'], 'title': row['title'], 'year': None} 
                         for row in rows_trg
                     ]
+        except Exception as e:
+            logger.error(f"NeonDB trigram search fail hua '{query}': {e}", exc_info=True)
+            results = [] # Trigram fail, FTS try karein
+
+        # 2. Fallback: Full-Text Search (agar trigram se kuch nahi mila)
+        if not results:
+            logger.debug(f"Neon Trigram fail hua '{query}', ab FTS (full-text) try...")
+            search_query_fts = """
+                SELECT imdb_id, title, ts_rank(title_search_vector, query) as rank
+                FROM movies, websearch_to_tsquery('simple', $1) AS query
+                WHERE title_search_vector @@ query
+                ORDER BY rank DESC
+                LIMIT $2;
+            """
+            try:
+                 async with self.pool.acquire() as conn:
+                    rows_fts = await conn.fetch(search_query_fts, query, limit)
+                    results = [
+                        {'imdb_id': row['imdb_id'], 'title': row['title'], 'year': None} 
+                        for row in rows_fts
+                    ]
             except Exception as e:
-                logger.error(f"NeonDB trigram search bhi fail hua '{query}': {e}", exc_info=True)
+                logger.error(f"NeonDB FTS search bhi fail hua '{query}': {e}", exc_info=True)
                 return []
         
         return results
@@ -250,15 +257,12 @@ class NeonDB:
                 result = await conn.fetchrow(query, batch_limit)
                 
                 if not result or not result['messages_deleted_tg']:
-                    return ([], 0) # Koi duplicates nahi mile/delete hue
+                    return ([], 0)
 
                 total_duplicates_found = result['total_duplicates_remaining']
                 tg_messages_to_delete = [tuple(msg) for msg in result['messages_deleted_tg']]
                 
                 logger.info(f"NeonDB: {len(tg_messages_to_delete)} duplicate entries DB se clean kiye.")
-                
-                # Hum yahan se deleted IMDB IDs return nahi kar rahe hain,
-                # par agar zaroorat pade toh 'imdb_ids_deleted' ka istemal kar sakte hain
                 
                 return (tg_messages_to_delete, total_duplicates_found)
                 
