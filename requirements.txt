@@ -12,3 +12,4 @@ motor==3.7.1
 pymongo==4.15.3
 certifi==2025.10.5
 asyncpg==0.29.0 # <-- NEONDB (POSTGRES) KE LIYE ZAROORI
+rapidfuzz
