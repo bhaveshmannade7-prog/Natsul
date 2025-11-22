@@ -29,20 +29,17 @@ class NeonDB:
     """
     
     # NAYA: Class-level lock (across all instances) for synchronized initialization
-    # (Although simple asyncio.Lock is only effective within one process,
-    # we use it here to ensure only one thread attempts setup per worker.)
     _initialization_lock = asyncio.Lock() 
-    _is_globally_setup = False # NAYA: Global flag to check if one worker has completed schema setup
+    _is_globally_setup = False # Global flag
 
     def __init__(self, database_url: str):
         self.database_url = database_url
         self.pool: asyncpg.Pool | None = None
-        # self.init_lock = asyncio.Lock() # Removed instance-level lock for cleaner logic
 
     async def init_db(self):
         """
         Connection pool banata hai aur zaroori tables, extensions, 
-        aur FTS/Trigram triggers को ensure karta है।
+        aur FTS/Trigram triggers ko ensure karta hai।
         """
         # --- PHASE 1: ACQUIRE LOCK (to prevent concurrent schema changes) ---
         async with self._initialization_lock: 
@@ -50,7 +47,6 @@ class NeonDB:
             # --- Check 1: Pool already exists and is active? ---
             if self.pool is not None:
                 try:
-                    # Attempt a quick fetch to verify connection health
                     async with self.pool.acquire() as conn:
                         await conn.fetchval('SELECT 1')
                     logger.debug("NeonDB pool already verified. Skipping schema setup.")
@@ -72,12 +68,9 @@ class NeonDB:
                     raise Exception("Pool creation returned None")
                 
                 # --- PHASE 3: SCHEMA SETUP (Only one thread globally should run this) ---
-                # The "tuple concurrently updated" error happens here.
-                # Since multiple processes are running, we rely on Postgres's IF NOT EXISTS
-                # and put the whole block under the lock.
-
                 async with self.pool.acquire() as conn:
-                    # 1. Extensions and Tables (IF NOT EXISTS is key)
+                    # 1. Extensions and Tables
+                    # ERROR FIX: Using single statements for clarity.
                     await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
                     
                     await conn.execute("""
@@ -95,34 +88,54 @@ class NeonDB:
                         );
                     """)
                     
-                    # 2. Alter Table (IF NOT EXISTS is key)
+                    # 2. Alter Table
                     await conn.execute("ALTER TABLE movies ADD COLUMN IF NOT EXISTS clean_title TEXT;")
                     await conn.execute("ALTER TABLE movies ADD COLUMN IF NOT EXISTS title_search_vector TSVECTOR;")
 
-                    # 3. Functions (CREATE OR REPLACE is safe from concurrent error)
+                    # 3. Functions (FTS Cleaning Function)
                     await conn.execute("""
                         CREATE OR REPLACE FUNCTION f_clean_text_for_search(text TEXT)
                         RETURNS TEXT AS $$
-                        -- ... (Function body remains the same)
+                        DECLARE
+                            cleaned_text TEXT;
+                        BEGIN
+                            IF text IS NULL THEN
+                                RETURN '';
+                            END IF;
+                            
+                            cleaned_text := lower(text);
+                            cleaned_text := regexp_replace(cleaned_text, '[._\-]+', ' ', 'g');
+                            cleaned_text := regexp_replace(cleaned_text, '[^a-z0-9\s]+', '', 'g');
+                            cleaned_text := regexp_replace(cleaned_text, '\y(s|season)\s*\d{1,2}\y', '', 'g');
+                            cleaned_text := trim(regexp_replace(cleaned_text, '\s+', ' ', 'g'));
+                            
+                            RETURN cleaned_text;
+                        END;
                         $$ LANGUAGE plpgsql IMMUTABLE;
                     """)
                     
-                    # 4. Indexes and Triggers (IF NOT EXISTS and DROP IF EXISTS helps)
+                    # 4. Indexes (Separate CREATE INDEX statements)
                     await conn.execute("DROP INDEX IF EXISTS idx_unique_file;")
-                    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_message_channel ON movies (message_id, channel_id);")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON movies (file_unique_id);")
+                    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_message_channel ON movies (message_id, channel_id);")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_imdb_id ON movies (imdb_id);")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_movie_search_vector ON movies USING GIN(title_search_vector);")
                     await conn.execute("CREATE INDEX IF NOT EXISTS idx_clean_title_trgm ON movies USING GIN (clean_title gin_trgm_ops);")
 
-                    # 5. Trigger
+                    # 5. Trigger Function
                     await conn.execute("""
                         CREATE OR REPLACE FUNCTION update_movie_search_vector()
                         RETURNS TRIGGER AS $$
-                        -- ... (Function body remains the same)
+                        BEGIN
+                            NEW.clean_title := f_clean_text_for_search(NEW.title);
+                            NEW.title_search_vector :=
+                                setweight(to_tsvector('simple', COALESCE(NEW.clean_title, '')), 'A');
+                            RETURN NEW;
+                        END;
                         $$ LANGUAGE plpgsql;
                     """)
                     
+                    # 6. Trigger Definition
                     await conn.execute("""
                         DROP TRIGGER IF EXISTS ts_movie_title_update ON movies;
                         CREATE TRIGGER ts_movie_title_update
