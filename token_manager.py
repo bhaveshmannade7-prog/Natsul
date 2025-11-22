@@ -1,7 +1,7 @@
 # token_manager.py
 import logging
 import asyncio
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Awaitable, Any # <--- FIX: Added Awaitable and Any
 from itertools import cycle
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -77,15 +77,10 @@ class TokenManager:
                     # Token ko rotate karein, non-blocking
                     await self._rotate_token_internal()
                     
-                    # Thoda wait karein agar FloodWait-X second ka info ho (optional)
-                    # Yahan hum maan rahe hain ki naya token turant available hoga
-                    # Agar yeh aakhiri token tha, toh firse pehla token istemal hoga
                     if attempt < retries - 1:
-                        # Sirf tabhi retry karein agar hamare paas naye tokens bache hon
                         await asyncio.sleep(0.5) # Chota sa backoff
                         continue
                     else:
-                        # Sabhi tokens try kar liye, ab ruk jao
                         logger.error("🚫 Sabhi bot tokens fail ho gaye (Flood Wait / 429)। Operation fail.")
                         return None 
                 
@@ -117,4 +112,3 @@ class TokenManager:
                 logger.info(f"Bot session {bot.token[:10]}... close ho gaya.")
             except Exception as e:
                 logger.error(f"Bot session close karte waqt error: {e}")
-
