@@ -28,9 +28,8 @@ class NeonDB:
     NeonDB (Postgres) ke liye Async Interface Class।
     """
     
-    # NAYA: Class-level lock (across all instances) for synchronized initialization
+    # NAYA: Class-level lock for synchronized initialization across all concurrent workers.
     _initialization_lock = asyncio.Lock() 
-    _is_globally_setup = False # Global flag
 
     def __init__(self, database_url: str):
         self.database_url = database_url
@@ -41,21 +40,24 @@ class NeonDB:
         Connection pool banata hai aur zaroori tables, extensions, 
         aur FTS/Trigram triggers ko ensure karta hai।
         """
-        # --- PHASE 1: ACQUIRE LOCK (to prevent concurrent schema changes) ---
+        # Phase 1: Quick check if already initialized
+        if self.pool is not None:
+            try:
+                # Agar pool exist karta hai, sirf ek quick ping karein
+                async with self.pool.acquire() as conn:
+                    await conn.fetchval('SELECT 1')
+                logger.debug("NeonDB pool verified. Skipping schema setup.")
+                return
+            except Exception:
+                logger.warning("Existing NeonDB pool connection lost. Re-initialization required.")
+                self.pool = None 
+
+        # Phase 2: Acquire Lock and Establish Pool Connection
+        # Lock ensures only one worker performs schema setup at a time.
         async with self._initialization_lock: 
             
-            # --- Check 1: Pool already exists and is active? ---
-            if self.pool is not None:
-                try:
-                    async with self.pool.acquire() as conn:
-                        await conn.fetchval('SELECT 1')
-                    logger.debug("NeonDB pool already verified. Skipping schema setup.")
-                    return
-                except Exception:
-                    logger.warning("Existing NeonDB pool connection lost. Re-initialization required.")
-                    self.pool = None # Force re-init if dead
-
-            # --- PHASE 2: CREATE POOL ---
+            if self.pool is not None: return # Double check after lock
+            
             try:
                 self.pool = await asyncpg.create_pool(
                     self.database_url,
@@ -67,85 +69,85 @@ class NeonDB:
                 if self.pool is None:
                     raise Exception("Pool creation returned None")
                 
-                # --- PHASE 3: SCHEMA SETUP (Only one thread globally should run this) ---
+                # Phase 3: SCHEMA SETUP WITHIN A TRANSACTION (to ensure atomicity)
                 async with self.pool.acquire() as conn:
-                    # 1. Extensions and Tables
-                    # ERROR FIX: Using single statements for clarity.
-                    await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
-                    
-                    await conn.execute("""
-                        CREATE TABLE IF NOT EXISTS movies (
-                            id SERIAL PRIMARY KEY,
-                            message_id BIGINT NOT NULL,
-                            channel_id BIGINT NOT NULL,
-                            file_id TEXT NOT NULL,
-                            file_unique_id TEXT NOT NULL,
-                            imdb_id TEXT,
-                            title TEXT,
-                            clean_title TEXT,
-                            added_date TIMESTAMPTZ DEFAULT NOW(),
-                            title_search_vector TSVECTOR
-                        );
-                    """)
-                    
-                    # 2. Alter Table
-                    await conn.execute("ALTER TABLE movies ADD COLUMN IF NOT EXISTS clean_title TEXT;")
-                    await conn.execute("ALTER TABLE movies ADD COLUMN IF NOT EXISTS title_search_vector TSVECTOR;")
+                    # Connection successful, ab database setup ko ek transaction mein wrap karein.
+                    async with conn.transaction():
+                        
+                        await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+                        
+                        await conn.execute("""
+                            CREATE TABLE IF NOT EXISTS movies (
+                                id SERIAL PRIMARY KEY,
+                                message_id BIGINT NOT NULL,
+                                channel_id BIGINT NOT NULL,
+                                file_id TEXT NOT NULL,
+                                file_unique_id TEXT NOT NULL,
+                                imdb_id TEXT,
+                                title TEXT,
+                                clean_title TEXT,
+                                added_date TIMESTAMPTZ DEFAULT NOW(),
+                                title_search_vector TSVECTOR
+                            );
+                        """)
+                        
+                        # Alter Table
+                        await conn.execute("ALTER TABLE movies ADD COLUMN IF NOT EXISTS clean_title TEXT;")
+                        await conn.execute("ALTER TABLE movies ADD COLUMN IF NOT EXISTS title_search_vector TSVECTOR;")
 
-                    # 3. Functions (FTS Cleaning Function)
-                    await conn.execute("""
-                        CREATE OR REPLACE FUNCTION f_clean_text_for_search(text TEXT)
-                        RETURNS TEXT AS $$
-                        DECLARE
-                            cleaned_text TEXT;
-                        BEGIN
-                            IF text IS NULL THEN
-                                RETURN '';
-                            END IF;
-                            
-                            cleaned_text := lower(text);
-                            cleaned_text := regexp_replace(cleaned_text, '[._\-]+', ' ', 'g');
-                            cleaned_text := regexp_replace(cleaned_text, '[^a-z0-9\s]+', '', 'g');
-                            cleaned_text := regexp_replace(cleaned_text, '\y(s|season)\s*\d{1,2}\y', '', 'g');
-                            cleaned_text := trim(regexp_replace(cleaned_text, '\s+', ' ', 'g'));
-                            
-                            RETURN cleaned_text;
-                        END;
-                        $$ LANGUAGE plpgsql IMMUTABLE;
-                    """)
-                    
-                    # 4. Indexes (Separate CREATE INDEX statements)
-                    await conn.execute("DROP INDEX IF EXISTS idx_unique_file;")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON movies (file_unique_id);")
-                    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_message_channel ON movies (message_id, channel_id);")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_imdb_id ON movies (imdb_id);")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_movie_search_vector ON movies USING GIN(title_search_vector);")
-                    await conn.execute("CREATE INDEX IF NOT EXISTS idx_clean_title_trgm ON movies USING GIN (clean_title gin_trgm_ops);")
+                        # Functions (CREATE OR REPLACE is safe)
+                        await conn.execute("""
+                            CREATE OR REPLACE FUNCTION f_clean_text_for_search(text TEXT)
+                            RETURNS TEXT AS $$
+                            DECLARE
+                                cleaned_text TEXT;
+                            BEGIN
+                                IF text IS NULL THEN
+                                    RETURN '';
+                                END IF;
+                                
+                                cleaned_text := lower(text);
+                                cleaned_text := regexp_replace(cleaned_text, '[._\-]+', ' ', 'g');
+                                cleaned_text := regexp_replace(cleaned_text, '[^a-z0-9\s]+', '', 'g');
+                                cleaned_text := regexp_replace(cleaned_text, '\y(s|season)\s*\d{1,2}\y', '', 'g');
+                                cleaned_text := trim(regexp_replace(cleaned_text, '\s+', ' ', 'g'));
+                                
+                                RETURN cleaned_text;
+                            END;
+                            $$ LANGUAGE plpgsql IMMUTABLE;
+                        """)
+                        
+                        # Indexes (DROP IF EXISTS + CREATE IF NOT EXISTS is robust)
+                        await conn.execute("DROP INDEX IF EXISTS idx_unique_file;")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON movies (file_unique_id);")
+                        await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_message_channel ON movies (message_id, channel_id);")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_imdb_id ON movies (imdb_id);")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_movie_search_vector ON movies USING GIN(title_search_vector);")
+                        await conn.execute("CREATE INDEX IF NOT EXISTS idx_clean_title_trgm ON movies USING GIN (clean_title gin_trgm_ops);")
 
-                    # 5. Trigger Function
-                    await conn.execute("""
-                        CREATE OR REPLACE FUNCTION update_movie_search_vector()
-                        RETURNS TRIGGER AS $$
-                        BEGIN
-                            NEW.clean_title := f_clean_text_for_search(NEW.title);
-                            NEW.title_search_vector :=
-                                setweight(to_tsvector('simple', COALESCE(NEW.clean_title, '')), 'A');
-                            RETURN NEW;
-                        END;
-                        $$ LANGUAGE plpgsql;
-                    """)
-                    
-                    # 6. Trigger Definition
-                    await conn.execute("""
-                        DROP TRIGGER IF EXISTS ts_movie_title_update ON movies;
-                        CREATE TRIGGER ts_movie_title_update
-                        BEFORE INSERT OR UPDATE ON movies
-                        FOR EACH ROW
-                        EXECUTE FUNCTION update_movie_search_vector();
-                    """)
+                        # Trigger Function
+                        await conn.execute("""
+                            CREATE OR REPLACE FUNCTION update_movie_search_vector()
+                            RETURNS TRIGGER AS $$
+                            BEGIN
+                                NEW.clean_title := f_clean_text_for_search(NEW.title);
+                                NEW.title_search_vector :=
+                                    setweight(to_tsvector('simple', COALESCE(NEW.clean_title, '')), 'A');
+                                RETURN NEW;
+                            END;
+                            $$ LANGUAGE plpgsql;
+                        """)
+                        
+                        # Trigger Definition
+                        await conn.execute("""
+                            DROP TRIGGER IF EXISTS ts_movie_title_update ON movies;
+                            CREATE TRIGGER ts_movie_title_update
+                            BEFORE INSERT OR UPDATE ON movies
+                            FOR EACH ROW
+                            EXECUTE FUNCTION update_movie_search_vector();
+                        """)
 
                 logger.info("NeonDB (Postgres) connection pool, table, aur FUZZY/Trigram initialize ho gaya।")
-                NeonDB._is_globally_setup = True
                 
             except Exception as e:
                 logger.critical(f"NeonDB pool initialize nahi ho paya: {e}", exc_info=True)
