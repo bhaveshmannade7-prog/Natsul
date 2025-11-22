@@ -13,3 +13,4 @@ certifi==2025.10.5
 asyncpg==0.29.0 # <-- NEONDB (POSTGRES) KE LIYE ZAROORI
 rapidfuzz
 redis
+gunicorn
