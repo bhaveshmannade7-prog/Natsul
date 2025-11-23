@@ -4,7 +4,8 @@ import logging
 import json
 from typing import Dict, Any, Optional
 from redis.asyncio import Redis
-from redis.asyncio.exceptions import ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
+# FIX: Redis exceptions ko seedha redis.exceptions se import karein
+from redis.exceptions import ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError 
 
 logger = logging.getLogger("bot.cache_layer")
 
@@ -124,4 +125,3 @@ class CacheLayer:
         if not self.is_active or not self._redis: return False
         key = self.CACHE_KEY_MOVIE.format(imdb_id=imdb_id)
         return await self._safe_redis_call("delete", key)
-
