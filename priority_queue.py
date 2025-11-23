@@ -30,8 +30,8 @@ class PriorityQueueSystem:
         if self._running:
             logger.warning("PriorityQueue pehle se hi running hai।")
             return
-        # FIX: Async self.stop() call ko hata diya gaya. Lifespan hook pehle hi await kar raha hai.
-        # self.stop() # Ensure clean start
+        # Async stop() call ko yahan se hata diya gaya tha taaki RuntimeWarning na aaye,
+        # aur lifespan hook mein graceful shutdown ensure ho.
         self._running = True
         
         for i in range(self._max_workers):
@@ -82,6 +82,9 @@ class PriorityQueueSystem:
                 break
                 
             try:
+                # FIX: Ek micro-sleep add karein taaki loop ko control mil sake aur context switch ho
+                await asyncio.sleep(0) 
+                
                 # Task execute karein
                 await task_coro
                 self._queue.task_done()
@@ -114,4 +117,4 @@ class PriorityQueueSystem:
         return self._queue.qsize()
 
 # Global Priority Queue instance
-priority_queue = PriorityQueueSystem(max_workers=25) 
+priority_queue = PriorityQueueSystem(max_workers=25)
