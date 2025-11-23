@@ -1,4 +1,5 @@
-# core_services.py
+# core_services.py (FINAL FIX)
+
 import asyncio
 import logging
 import random
@@ -14,7 +15,6 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Update
 
-# NAYA FIX: aioredis ko replace kiya gaya redis.asyncio se
 import redis.asyncio as aioredis 
 
 # --- DB Imports for Type Hinting ---
@@ -22,6 +22,11 @@ from database import Database
 from neondb import NeonDB
 
 logger = logging.getLogger("bot.core_services")
+
+# --- NAYA FIX: NeonDB Initialization Lock (Feature C, D) ---
+# Is lock ka istemal NeonDB init_db function ko multiple Gunicorn workers se protect karne ke liye hoga.
+NEON_INIT_LOCK = asyncio.Lock()
+
 
 # =======================================================
 # +++++ 1. Priority Wrapper Decorator +++++
@@ -44,6 +49,7 @@ def priority_wrapper(priority: Literal['HIGH', 'MEDIUM', 'LOW']):
 # =======================================================
 
 class BotManager:
+    # ... (No changes here from previous fix)
     """
     Manages multiple bot tokens for async load balancing and flood control.
     """
@@ -69,18 +75,15 @@ class BotManager:
         """Returns the next available bot instance in a round-robin fashion."""
         now = time.time()
         
-        # 1. Active tokens nikaalein (jo flood wait mein nahi hain)
         available_tokens = [
             bot for bot in self.bots 
             if self.bot_status.get(bot.token, 0.0) < now
         ]
         
         if not available_tokens:
-            # Agar sabhi tokens flood wait mein hain, toh bas pehla token chunein
             logger.warning("All bot tokens are currently flood-limited. Retrying primary token.")
             return self.bots[0] 
         
-        # 2. Random load balancing
         return random.choice(available_tokens)
 
     async def safe_api_call(self, coro: Callable, timeout: int = 8, semaphore: asyncio.Semaphore | None = None) -> Any:
@@ -90,7 +93,6 @@ class BotManager:
         """
         token_to_use = None
         
-        # NOTE: Hum yahaan semaphore ko wrap kar rahe hain, jisse ye low-level TG limit ko control kare.
         semaphore_to_use = semaphore if semaphore else asyncio.Semaphore(1)
         async with semaphore_to_use:
             
@@ -100,7 +102,6 @@ class BotManager:
                 bot_instance = self.get_available_bot()
                 token_to_use = bot_instance.token
                 
-                # Original Coroutine ko bind karein naye bot instance ke saath
                 bound_coro = self._rebind_coroutine(coro, bot_instance)
                 
                 try:
@@ -112,7 +113,6 @@ class BotManager:
                     error_msg = str(e).lower()
                     
                     if "too many requests" in error_msg:
-                        # --- INSTANT FLOOD SWITCH (FEATURE A) ---
                         wait_time_match = re.search(r'retry after (\d+)', error_msg)
                         wait_time = int(wait_time_match.group(1)) if wait_time_match else self.flood_wait_sec
                         
@@ -121,7 +121,7 @@ class BotManager:
                         
                         if attempt == max_attempts - 1:
                             logger.critical("ALL bot tokens are under flood limit.")
-                            return None # Sabhi tokens busy hain
+                            return None
                         
                         await asyncio.sleep(0.5) 
                         continue
@@ -147,10 +147,8 @@ class BotManager:
     def _rebind_coroutine(self, coro: Callable, bot_instance: Bot):
         """Replaces the bot instance in the coroutine if it was bound to an old bot object."""
         if hasattr(coro, '__self__') and isinstance(coro.__self__, Bot):
-            # Agar coroutine Bot instance par bound hai (e.g., bot.send_message)
             method_name = coro.__name__
             if hasattr(bot_instance, method_name):
-                # Naye bot instance ke saath rebind karein
                 return getattr(bot_instance, method_name)
         return coro
         
@@ -182,7 +180,6 @@ class RedisCache:
     async def connect(self):
         if not self.is_enabled: return
         try:
-            # NAYA FIX: redis.asyncio.from_url ka istemal karein
             self.client = aioredis.from_url(self.redis_url, decode_responses=True)
             await self.client.ping()
             logger.info("✅ Redis connection successful.")
@@ -202,7 +199,6 @@ class RedisCache:
         try:
             value = await self.client.get(key)
             if value:
-                # Agar value Redis mein hai, toh use JSON parse karein
                 return json.loads(value)
             return None
         except Exception as e:
@@ -226,6 +222,7 @@ class RedisCache:
             logger.error(f"Redis DELETE error for key {key}: {e}", exc_info=False)
 
 class DatabaseCacheWrapper:
+    # ... (No changes here from previous fix)
     """
     Wraps existing DB methods to add Redis caching layer (TTL 24 hours).
     Original DB logic is NOT modified.
@@ -236,53 +233,40 @@ class DatabaseCacheWrapper:
         self.cache = redis_cache
         self.TTL_24H = 86400
 
-    # --- Movie Retrieval (HIGH PRIORITY CACHE) ---
     async def get_movie_by_imdb(self, imdb_id: str) -> Dict | None:
         cache_key = f"movie:imdb:{imdb_id}"
         
-        # 1. Cache hit
         movie = await self.cache.get(cache_key)
         if movie is not None:
             logger.debug(f"Cache HIT: get_movie_by_imdb {imdb_id}")
-            # Negative cache check (Agar {} mila, toh DB mein nahi hai)
             return movie if movie else None
             
-        # 2. Cache miss, call original function
         movie = await self.primary_db.get_movie_by_imdb(imdb_id)
         
-        # 3. Cache set (even for None/empty result, for short TTL)
         if movie is not None:
             await self.cache.set(cache_key, movie, ttl=self.TTL_24H)
         elif self.cache.is_enabled:
-             # Negative caching for 5 minutes
              await self.cache.set(cache_key, {}, ttl=300) 
              
         return movie
 
-    # --- Count Retrieval (MEDIUM PRIORITY CACHE) ---
     async def get_movie_count(self, db_instance: Literal['primary', 'neon'] = 'primary') -> int:
         db = self.primary_db if db_instance == 'primary' else self.neon_db
         cache_key = f"count:movies:{db_instance}"
         
-        # 1. Cache hit (TTL 1 hour)
         count = await self.cache.get(cache_key)
         if isinstance(count, int) and count >= 0:
             logger.debug(f"Cache HIT: get_movie_count {db_instance}")
             return count
             
-        # 2. Cache miss, call original function
         count = await db.get_movie_count()
         
-        # 3. Cache set (TTL 1 hour)
         if count >= 0:
             await self.cache.set(cache_key, count, ttl=3600)
             
         return count
 
-    # --- Original Functions ko pass through karein ---
     def __getattr__(self, name):
-        """Pass all other calls to the primary DB instance."""
-        # Ye functions cacheable nahi hain, ya unka result cache mein nahi rakha jata.
         if name in ['is_ready', '_connect', 'init_db', '_handle_db_error', 'add_user', 'get_concurrent_user_count']:
             return getattr(self.primary_db, name)
         
@@ -311,71 +295,90 @@ class PriorityDispatcher:
         logger.info(f"PriorityDispatcher initialized with limit {max_concurrent}.")
 
     def start_workers(self):
-        """Shuru karta hai worker loop ko."""
+        """Shuru karta hai worker loop ko।"""
         if self.is_running: return
         self.is_running = True
-        # 5 worker tasks shuru karein (Load balancing ke liye)
+        # 5 worker tasks shuru karein 
         for i in range(5):
              asyncio.create_task(self._worker_loop(i + 1))
         logger.info("PriorityDispatcher worker shuru ho gaya.")
 
     async def stop_workers(self):
-        """Band karta hai worker loop ko."""
+        """Band karta hai worker loop ko।"""
         if not self.is_running: return
         self.is_running = False
         # Queues mein dummy items daalein taaki workers queue.get() se bahar aa saken
-        await self.queue_high.put(None)
-        await self.queue_medium.put(None)
-        await self.queue_low.put(None)
+        # Har worker ke liye ek None signal
+        for _ in range(5):
+             await self.queue_high.put(None)
+             await self.queue_medium.put(None)
+             await self.queue_low.put(None)
         logger.info("PriorityDispatcher workers ko rok raha hai...")
-        # Tasks ko cancel karne ki zaroorat nahi hai agar loop mein break/return hai.
+
 
     async def _worker_loop(self, worker_id: int):
-        """Queue se updates nikalta hai aur process karta hai।"""
+        """Queue se updates nikalta hai aur process karta hai। (FIXED)"""
         while self.is_running:
             try:
                 # Priority Order: HIGH -> MEDIUM -> LOW
-                queue_get_tasks = {
-                    'HIGH': self.queue_high.get(),
-                    'MEDIUM': self.queue_medium.get(),
-                    'LOW': self.queue_low.get(),
+                
+                # NAYA FIX: queue.get() calls ko race karein
+                get_high = self.queue_high.get()
+                get_medium = self.queue_medium.get()
+                get_low = self.queue_low.get()
+                
+                # Coroutines ko tasks mein lapetein taaki asyncio.wait() accept kare
+                pending_tasks = {
+                    asyncio.create_task(get_high): 'HIGH',
+                    asyncio.create_task(get_medium): 'MEDIUM',
+                    asyncio.create_task(get_low): 'LOW'
                 }
                 
-                # Sabse pehle ready queue se item uthao
+                # Sabse pehle complete hone wale task ka wait karein
                 done, pending = await asyncio.wait(
-                    queue_get_tasks.values(),
+                    pending_tasks.keys(),
                     return_when=asyncio.FIRST_COMPLETED,
-                    timeout=5.0 # Timeout har 5 second mein loop check karne ke liye
+                    timeout=5.0
                 )
-                
+
                 if not done: 
-                    continue # Timeout, phir se check karo
-                
-                # Done tasks mein sabse high priority wala item chuno
+                    # Timeout ya kuch nahi mila, baki pending tasks ko cancel karke continue karein
+                    for task in pending_tasks.keys():
+                        if not task.done():
+                            task.cancel()
+                    continue
+
                 update_data = None
                 
-                # High priority queue check karein
-                if not self.queue_high.empty() or self.queue_high.qsize() > 0:
-                     update_data = self.queue_high.get_nowait()
-                elif not self.queue_medium.empty() or self.queue_medium.qsize() > 0:
-                     update_data = self.queue_medium.get_nowait()
-                elif not self.queue_low.empty() or self.queue_low.qsize() > 0:
-                     update_data = self.queue_low.get_nowait()
-                else:
-                    # Agar sab empty hain, to next loop iteration mein wait karein
-                    continue 
+                # Check karein ki kis queue se data aaya
+                for task in done:
+                    try:
+                        data = task.result()
+                        if data is not None:
+                            update_data = data
+                            break
+                        elif data is None:
+                            # Shutdown signal mila
+                            logger.info(f"Worker {worker_id} ne shutdown signal prapt kiya।")
+                            return
+                    except Exception:
+                        # Task failed ya cancelled, ignore
+                        pass 
 
-                if update_data is None:
-                    # Shutdown signal mila
-                    logger.info(f"Worker {worker_id} ne shutdown signal prapt kiya।")
-                    return
-
-                asyncio.create_task(self._process_update_with_semaphore(update_data))
+                # Baki pending tasks ko cancel karein
+                for task in pending_tasks.keys():
+                    if task not in done and not task.done():
+                        task.cancel()
+                        
+                if update_data:
+                    # Agar data mila hai, toh process karein
+                    asyncio.create_task(self._process_update_with_semaphore(update_data))
 
             except asyncio.CancelledError:
                 return
             except Exception as e:
-                logger.error(f"PriorityDispatcher Worker {worker_id} loop error: {e}", exc_info=True)
+                # Agar koi unexpected error aaye (jaise Task cancel)
+                logger.error(f"PriorityDispatcher Worker {worker_id} unexpected error: {e}", exc_info=True)
                 await asyncio.sleep(1) 
 
     async def _process_update_with_semaphore(self, update_data: Tuple[Update, Bot, Dict[str, Any]]):
