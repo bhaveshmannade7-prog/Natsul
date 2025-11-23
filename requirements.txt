@@ -1,17 +1,20 @@
+# requirements.txt
 aiogram==3.10.0
 fastapi==0.111.1
-uvicorn==0.30.3
+uvicorn[standard]==0.30.3
 python-multipart==0.0.9
-aiohttp # typesense async ke liye zaroori hai
+aiohttp==3.9.5
 python-dotenv==1.0.1
 aiofiles==23.2.1
 httpx==0.28.1
-uvloop
+uvloop==0.22.1
 motor==3.7.1
 pymongo==4.15.3
 certifi==2025.10.5
-asyncpg==0.29.0 # <-- NEONDB (POSTGRES) KE LIYE ZAROORI
-rapidfuzz
-redis
-gunicorn
-aioredis==2
+asyncpg==0.29.0
+rapidfuzz==3.14.3
+# --- OLD: redis (v7.x)
+# --- OLD: aioredis==2
+# --- NAYA FIX: aioredis ko hataakar sirf redis ka latest async version rakhein
+redis==5.0.1  # Latest stable version jo async support karta hai
+gunicorn==23.0.0
