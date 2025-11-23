@@ -15,7 +15,7 @@ async def safe_tg_call_proxy(
     timeout: int, 
     semaphore: Optional[asyncio.Semaphore] = None
 ):
-    """Safe Telegram API call wrapper (Flood wait and error handling ke saath)"""
+    """Safe Telegram API call wrapper (Flood wait aur error handling ke saath)"""
     semaphore_to_use = semaphore or asyncio.Semaphore(1)
     try:
         async with semaphore_to_use:
@@ -50,7 +50,6 @@ class MultiBotProxy:
         self._semaphore = asyncio.Semaphore(1)
         self._initialized = False
 
-    # FIX: Correct type hint for DefaultBotProperties
     async def initialize_alternate_bots(self, default_properties: DefaultBotProperties):
         """Alternate tokens se Bot instances banata hai।"""
         if self._initialized:
@@ -63,8 +62,10 @@ class MultiBotProxy:
                 # Primary bot ke default properties use karein
                 bot_instance = Bot(token=token, default=default_properties)
                 self._bots.append(bot_instance)
-                logger.info(f"Alternate Bot '{bot_instance.user.username}' successfully initialized.")
+                # FIX: bot.user.username access ko hataayein, yeh async context se bahar available nahi hota
+                logger.info(f"Alternate Bot token ending in '...{token[-5:]}' successfully created.")
             except Exception as e:
+                # Log the error but continue to next bot
                 logger.error(f"Failed to initialize bot with token ending in '...{token[-5:]}': {e}")
 
         self._initialized = True
@@ -76,7 +77,6 @@ class MultiBotProxy:
             raise RuntimeError("No active bots in the proxy!")
 
         # Async context se bahar hone ke karan, simple thread-safe index rotation ka use karein
-        # Critical section nahi hai, isliye simple index increment ka use kar sakte hain
         bot_to_use = self._bots[self._bot_index]
         self._bot_index = (self._bot_index + 1) % len(self._bots)
         return bot_to_use
