@@ -10,8 +10,10 @@ logger = logging.getLogger("bot.queue")
 Priority = Literal["HIGH", "MEDIUM", "LOW"] 
 
 class PriorityQueueWrapper:
-# ... (Class definition remains the same)
-
+    """
+    Ek high-concurrency non-blocking task queue jo asyncio.Semaphore ka istemal karta hai।
+    """
+    
     def __init__(self, max_concurrent: int):
         self.max_concurrent = max_concurrent
         self.semaphore = asyncio.Semaphore(max_concurrent)
@@ -19,7 +21,9 @@ class PriorityQueueWrapper:
         logger.info(f"PriorityQueueWrapper initialized with concurrency limit: {max_concurrent}")
 
     async def put(self, coro: Awaitable[Any], priority: Priority = "MEDIUM") -> asyncio.Task:
-# ... (put method remains the same)
+        """
+        Task ko queue mein daalta hai aur turant ek asyncio.Task return karta hai।
+        """
         self.queue_size += 1
         
         async def gated_task():
@@ -43,14 +47,16 @@ class PriorityQueueWrapper:
         return task
 
     def get_queue_status(self) -> dict:
-# ... (get_queue_status method remains the same)
+        """
+        Status return karta hai।
+        """
         return {
             "max_concurrent": self.max_concurrent,
             "current_queue_size": max(0, self.queue_size),
             "current_active_tasks": "Unknown (Introspection blocked by asyncio.Semaphore design)"
         }
 
-# --- Decorator for easy handler integration (FINAL FIX: Ensure DP context access) ---
+# --- Decorator for easy handler integration (FINAL FIX: Guaranteed DP Access) ---
 
 def priority_task_wrapper(priority: Priority):
     def decorator(func: Callable):
@@ -59,17 +65,14 @@ def priority_task_wrapper(priority: Priority):
             
             queue_wrapper = None
             
-            # METHOD 1: Try finding queue_wrapper directly injected (Best for Aiogram 3+)
-            queue_wrapper: PriorityQueueWrapper = kwargs.get('queue_wrapper')
+            # METHOD 1: Try accessing queue_wrapper through Bot/Dispatcher (most reliable path)
+            # Find the Bot instance first, which should have the dispatcher attribute.
+            bot_instance = kwargs.get('bot')
+            if not bot_instance and args and hasattr(args[0], 'bot'):
+                bot_instance = args[0].bot
 
-            if not queue_wrapper:
-                # METHOD 2: Try finding dispatcher and accessing queue_wrapper attribute
-                dp = kwargs.get('dispatcher')
-                if not dp and args and hasattr(args[0], 'bot') and hasattr(args[0].bot, 'dispatcher'):
-                    dp = args[0].bot.dispatcher
-                
-                if dp and hasattr(dp, 'queue_wrapper'):
-                    queue_wrapper = dp.queue_wrapper
+            if bot_instance and hasattr(bot_instance, 'dispatcher') and hasattr(bot_instance.dispatcher, 'queue_wrapper'):
+                queue_wrapper = bot_instance.dispatcher.queue_wrapper
             
             # --- EXECUTION ---
             if not queue_wrapper:
