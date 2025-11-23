@@ -3,8 +3,10 @@ import asyncio
 import logging
 import random
 import time
+import re
 from typing import List, Dict, Tuple, Any, Callable, Literal
 import json
+from functools import wraps
 
 from aiogram import Bot, types, Dispatcher
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -12,7 +14,8 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Update
 
-import aioredis # New dependency
+# NAYA FIX: aioredis ko replace kiya gaya redis.asyncio se
+import redis.asyncio as aioredis 
 
 # --- DB Imports for Type Hinting ---
 from database import Database
@@ -21,7 +24,23 @@ from neondb import NeonDB
 logger = logging.getLogger("bot.core_services")
 
 # =======================================================
-# +++++ 1. Bot Manager (Multi-Token Load Balancing) +++++
+# +++++ 1. Priority Wrapper Decorator +++++
+# =======================================================
+
+def priority_wrapper(priority: Literal['HIGH', 'MEDIUM', 'LOW']):
+    """
+    Aiogram handler ko priority assign karne ke liye decorator.
+    """
+    def decorator(func: Callable):
+        setattr(func, '__handler_priority__', priority)
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# =======================================================
+# +++++ 2. Bot Manager (Multi-Token Load Balancing) +++++
 # =======================================================
 
 class BotManager:
@@ -58,12 +77,10 @@ class BotManager:
         
         if not available_tokens:
             # Agar sabhi tokens flood wait mein hain, toh bas pehla token chunein
-            # (Yeh usse wapas check karne ka mauka dega)
             logger.warning("All bot tokens are currently flood-limited. Retrying primary token.")
             return self.bots[0] 
         
-        # 2. Round-robin / random chunein (round-robin + load balancing)
-        # Abhi ke liye random load balancing use kar rahe hain.
+        # 2. Random load balancing
         return random.choice(available_tokens)
 
     async def safe_api_call(self, coro: Callable, timeout: int = 8, semaphore: asyncio.Semaphore | None = None) -> Any:
@@ -73,9 +90,10 @@ class BotManager:
         """
         token_to_use = None
         
-        async with (semaphore if semaphore else asyncio.Semaphore(1)):
+        # NOTE: Hum yahaan semaphore ko wrap kar rahe hain, jisse ye low-level TG limit ko control kare.
+        semaphore_to_use = semaphore if semaphore else asyncio.Semaphore(1)
+        async with semaphore_to_use:
             
-            # --- Load Balancing Logic ---
             max_attempts = len(self.bots)
             for attempt in range(max_attempts):
                 
@@ -83,11 +101,9 @@ class BotManager:
                 token_to_use = bot_instance.token
                 
                 # Original Coroutine ko bind karein naye bot instance ke saath
-                # (Zaroori agar coro.im_self mein bot instance hard-coded ho)
                 bound_coro = self._rebind_coroutine(coro, bot_instance)
                 
                 try:
-                    # 100ms ka chhota sleep load balancing ko behtar karta hai
                     if semaphore: await asyncio.sleep(0.1) 
                     
                     return await asyncio.wait_for(bound_coro, timeout=timeout)
@@ -104,22 +120,20 @@ class BotManager:
                         logger.warning(f"⚠️ Token {token_to_use[:5]}... flood-limited for {wait_time}s. Switching tokens.")
                         
                         if attempt == max_attempts - 1:
-                            # Agar sabhi tokens fail ho gaye
                             logger.critical("ALL bot tokens are under flood limit.")
-                            raise # Sabhi tokens busy hain, abhi throw karein
+                            return None # Sabhi tokens busy hain
                         
-                        # Agle token par switch karein (loop phir se chalega)
-                        await asyncio.sleep(0.5) # Thoda delay next attempt se pehle
+                        await asyncio.sleep(0.5) 
                         continue
                         
                     elif "bot was blocked" in error_msg or "user is deactivated" in error_msg:
-                        logger.info(f"TG: Bot block ya user deactivated."); return False
+                        return False
                     elif "chat not found" in error_msg or "peer_id_invalid" in error_msg:
-                        logger.info(f"TG: Chat nahi mila."); return False
+                        return False
                     elif "message is not modified" in error_msg:
-                        logger.debug(f"TG: Message modify nahi hua."); return None
+                        return None
                     elif "message to delete not found" in error_msg or "message to copy not found" in error_msg:
-                        logger.debug(f"TG: Message (delete/copy) nahi mila."); return None
+                        return None
                     else:
                         logger.warning(f"TG Error (Token: {token_to_use[:5]}...): {e}"); return None
                         
@@ -128,7 +142,7 @@ class BotManager:
                 except Exception as e:
                     logger.exception(f"TG Unexpected error (Token: {token_to_use[:5]}...): {e}"); return None
                     
-            return None # Agar loop poora ho gaya
+            return None 
 
     def _rebind_coroutine(self, coro: Callable, bot_instance: Bot):
         """Replaces the bot instance in the coroutine if it was bound to an old bot object."""
@@ -136,10 +150,8 @@ class BotManager:
             # Agar coroutine Bot instance par bound hai (e.g., bot.send_message)
             method_name = coro.__name__
             if hasattr(bot_instance, method_name):
+                # Naye bot instance ke saath rebind karein
                 return getattr(bot_instance, method_name)
-        # Agar coroutine un-bound hai ya function ko seedha pass kiya gaya hai (e.g. get_chat_member)
-        # Toh user code mein Bot ko seedha pass karna hoga (jo abhi bot.py mein hai)
-        # Jiss Bot instance ko hum rebind kar sakte hain, usse yahaan return karein
         return coro
         
     async def close(self):
@@ -152,7 +164,7 @@ class BotManager:
 
 
 # =======================================================
-# +++++ 2. Redis Cache (Optional + Async) +++++
+# +++++ 3. Redis Cache (Optional + Async) +++++
 # =======================================================
 
 class RedisCache:
@@ -160,12 +172,17 @@ class RedisCache:
     def __init__(self, redis_url: str | None, ttl: int = 86400):
         self.redis_url = redis_url
         self.ttl = ttl
-        self.client: aioredis.Redis | None = None
+        self.client: aioredis.Redis | None = None 
         self.is_enabled = bool(redis_url)
+        if self.is_enabled:
+             logger.info("Redis is configured. Attempting connection on startup.")
+        else:
+             logger.warning("REDIS_URL not set in .env. Caching is gracefully disabled.")
 
     async def connect(self):
         if not self.is_enabled: return
         try:
+            # NAYA FIX: redis.asyncio.from_url ka istemal karein
             self.client = aioredis.from_url(self.redis_url, decode_responses=True)
             await self.client.ping()
             logger.info("✅ Redis connection successful.")
@@ -185,7 +202,7 @@ class RedisCache:
         try:
             value = await self.client.get(key)
             if value:
-                # Assuming all stored values are JSON dumps of dicts/lists
+                # Agar value Redis mein hai, toh use JSON parse karein
                 return json.loads(value)
             return None
         except Exception as e:
@@ -227,7 +244,8 @@ class DatabaseCacheWrapper:
         movie = await self.cache.get(cache_key)
         if movie is not None:
             logger.debug(f"Cache HIT: get_movie_by_imdb {imdb_id}")
-            return movie
+            # Negative cache check (Agar {} mila, toh DB mein nahi hai)
+            return movie if movie else None
             
         # 2. Cache miss, call original function
         movie = await self.primary_db.get_movie_by_imdb(imdb_id)
@@ -264,16 +282,18 @@ class DatabaseCacheWrapper:
     # --- Original Functions ko pass through karein ---
     def __getattr__(self, name):
         """Pass all other calls to the primary DB instance."""
+        # Ye functions cacheable nahi hain, ya unka result cache mein nahi rakha jata.
         if name in ['is_ready', '_connect', 'init_db', '_handle_db_error', 'add_user', 'get_concurrent_user_count']:
             return getattr(self.primary_db, name)
-        # Agar koi dusra call (jisse hum cache nahi kar rahe) call kiya jaaye, toh use primary DB ko forward karein.
+        
         if hasattr(self.primary_db, name):
             return getattr(self.primary_db, name)
+            
         raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
 
 # =======================================================
-# +++++ 3. Priority Queue Dispatcher +++++
+# +++++ 4. Priority Queue Dispatcher +++++
 # =======================================================
 
 class PriorityDispatcher:
@@ -294,60 +314,86 @@ class PriorityDispatcher:
         """Shuru karta hai worker loop ko."""
         if self.is_running: return
         self.is_running = True
-        self.worker_task = asyncio.create_task(self._worker_loop())
+        # 5 worker tasks shuru karein (Load balancing ke liye)
+        for i in range(5):
+             asyncio.create_task(self._worker_loop(i + 1))
         logger.info("PriorityDispatcher worker shuru ho gaya.")
 
     async def stop_workers(self):
         """Band karta hai worker loop ko."""
         if not self.is_running: return
         self.is_running = False
-        if self.worker_task:
-            self.worker_task.cancel()
-            try: await asyncio.wait_for(self.worker_task, timeout=2.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError): pass
-            self.worker_task = None
-        logger.info("PriorityDispatcher worker band ho gaya.")
+        # Queues mein dummy items daalein taaki workers queue.get() se bahar aa saken
+        await self.queue_high.put(None)
+        await self.queue_medium.put(None)
+        await self.queue_low.put(None)
+        logger.info("PriorityDispatcher workers ko rok raha hai...")
+        # Tasks ko cancel karne ki zaroorat nahi hai agar loop mein break/return hai.
 
-    async def _worker_loop(self):
-        """Queue se updates nikalta hai aur process karta hai."""
+    async def _worker_loop(self, worker_id: int):
+        """Queue se updates nikalta hai aur process karta hai।"""
         while self.is_running:
-            # Priority Order: HIGH -> MEDIUM -> LOW
             try:
-                if not self.queue_high.empty():
-                    update_data = await self.queue_high.get()
-                elif not self.queue_medium.empty():
-                    update_data = await self.queue_medium.get()
-                elif not self.queue_low.empty():
-                    update_data = await self.queue_low.get()
+                # Priority Order: HIGH -> MEDIUM -> LOW
+                queue_get_tasks = {
+                    'HIGH': self.queue_high.get(),
+                    'MEDIUM': self.queue_medium.get(),
+                    'LOW': self.queue_low.get(),
+                }
+                
+                # Sabse pehle ready queue se item uthao
+                done, pending = await asyncio.wait(
+                    queue_get_tasks.values(),
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=5.0 # Timeout har 5 second mein loop check karne ke liye
+                )
+                
+                if not done: 
+                    continue # Timeout, phir se check karo
+                
+                # Done tasks mein sabse high priority wala item chuno
+                update_data = None
+                
+                # High priority queue check karein
+                if not self.queue_high.empty() or self.queue_high.qsize() > 0:
+                     update_data = self.queue_high.get_nowait()
+                elif not self.queue_medium.empty() or self.queue_medium.qsize() > 0:
+                     update_data = self.queue_medium.get_nowait()
+                elif not self.queue_low.empty() or self.queue_low.qsize() > 0:
+                     update_data = self.queue_low.get_nowait()
                 else:
-                    # Agar sabhi queues khaali hain, toh intezaar karein
-                    await asyncio.sleep(0.01)
-                    continue
-                    
+                    # Agar sab empty hain, to next loop iteration mein wait karein
+                    continue 
+
+                if update_data is None:
+                    # Shutdown signal mila
+                    logger.info(f"Worker {worker_id} ne shutdown signal prapt kiya।")
+                    return
+
                 asyncio.create_task(self._process_update_with_semaphore(update_data))
 
             except asyncio.CancelledError:
-                break
+                return
             except Exception as e:
-                logger.error(f"PriorityDispatcher loop error: {e}", exc_info=True)
-                await asyncio.sleep(1) # Error ke baad chhota sa delay
+                logger.error(f"PriorityDispatcher Worker {worker_id} loop error: {e}", exc_info=True)
+                await asyncio.sleep(1) 
 
     async def _process_update_with_semaphore(self, update_data: Tuple[Update, Bot, Dict[str, Any]]):
-        """Semaphore ke andar update ko process karta hai."""
+        """Semaphore ke andar update ko process karta hai।"""
         update, bot_instance, context = update_data
         
         try:
+            # Global concurrency limit (Semaphore)
             async with self.semaphore:
                 # Original _process_update_safe logic ko chalayein
                 await self.dp.feed_update(bot=bot_instance, update=update, **context)
                 
         except Exception as e:
-            # Update process karte waqt koi bhi error
             logger.exception(f"Priority Queue se update process karte waqt error {update.update_id}: {e}")
 
     async def dispatch(self, update: Update, bot_instance: Bot, priority: Literal['HIGH', 'MEDIUM', 'LOW'], **context):
         """
-        Update ko priority ke aadhaar par queue mein daalta hai.
+        Update ko priority ke aadhaar par queue mein daalta hai।
         """
         update_data = (update, bot_instance, context)
         
@@ -358,25 +404,4 @@ class PriorityDispatcher:
         elif priority == 'LOW':
             await self.queue_low.put(update_data)
         else:
-            logger.warning(f"Invalid priority '{priority}' for update {update.update_id}. Defaulting to LOW.")
             await self.queue_low.put(update_data)
-        
-        # Non-freezing behavior: Update ko queue mein daal diya gaya hai,
-        # webhook response turant wapas chala jayega.
-
-# =======================================================
-# +++++ 4. Priority Wrapper Decorator +++++
-# =======================================================
-
-def priority_wrapper(priority: Literal['HIGH', 'MEDIUM', 'LOW']):
-    """
-    Aiogram handler ko priority assign karne ke liye decorator.
-    """
-    def decorator(func: Callable):
-        setattr(func, '__handler_priority__', priority)
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            return await func(*args, **kwargs)
-        return wrapper
-    return decorator
-
