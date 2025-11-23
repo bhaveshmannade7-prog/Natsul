@@ -30,7 +30,8 @@ class PriorityQueueSystem:
         if self._running:
             logger.warning("PriorityQueue pehle se hi running hai।")
             return
-        self.stop() # Ensure clean start
+        # FIX: Async self.stop() call ko hata diya gaya. Lifespan hook pehle hi await kar raha hai.
+        # self.stop() # Ensure clean start
         self._running = True
         
         for i in range(self._max_workers):
