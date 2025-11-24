@@ -6,6 +6,6 @@ motor~=3.3
 pymongo~=4.5
 asyncpg~=0.28
 certifi~=2023.7
-rapidfuzz~=6.0
+rapidfuzz~=3.0 
 uvloop~=0.18.0
 redis[async]~=5.0 
