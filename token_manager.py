@@ -1,119 +1,142 @@
-# token_manager.py
-import asyncio
 import logging
-import random
-from typing import Dict, List, Set, Tuple
-from datetime import datetime, timedelta, timezone
-
+import asyncio
+from typing import List, Any, Callable
 from aiogram import Bot
-from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramAPIError
 
 logger = logging.getLogger("bot.token_manager")
 
 class TokenManager:
-    """
-    Manages multiple bot tokens for load balancing and flood control.
-    """
-    
-    def __init__(self, bot_tokens: str, fallback_tokens: List[str]):
-        # All available tokens (Primary + Alternates)
-        all_tokens = [bot_tokens] + fallback_tokens 
-        if not all_tokens:
-            raise ValueError("No bot tokens provided.")
-            
-        self.tokens = [t.strip() for t in all_tokens if t.strip()]
-        self.bots: Dict[str, Bot] = {}
-        # Stores flooded tokens: {token: recovery_time}
-        self.flooded_tokens: Dict[str, datetime] = {} 
-        # Stores bot assignment: {user_id: token}
-        self.user_token_map: Dict[int, str] = {}
-        self.bot_lock = asyncio.Lock()
-        
-        # Initialize Bot objects (Do not modify existing Bot properties)
-        for token in self.tokens:
-            if token not in self.bots:
-                self.bots[token] = Bot(
-                    token=token, 
-                    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-                )
-        
-        if not self.bots:
-             raise ValueError("No valid Bot objects could be initialized.")
+    def __init__(self, main_bot: Bot):
+        self.main_bot = main_bot
+        self.bots: List[Bot] = [main_bot]
+        self.current_index = 0
+        self.lock = asyncio.Lock()
+        self.active = False
 
-        self.available_tokens = set(self.bots.keys())
-        self.logger_info()
+    async def start(self, token_list_str: str):
+        """Initializes extra worker bots from the comma-separated string."""
+        if not token_list_str:
+            return
 
-    def logger_info(self):
-        logger.info(f"TokenManager initialized with {len(self.bots)} bot tokens.")
-        for i, token in enumerate(self.bots.keys()):
-            logger.info(f"  Bot {i+1}: Token ending in ...{token[-4:]}")
+        tokens = [t.strip() for t in token_list_str.split(",") if t.strip()]
+        if not tokens:
+            return
 
-    async def get_bot(self, user_id: int | None = None) -> Bot:
-        """
-        Retrieves a non-flooded bot instance, prioritizing the user's assigned bot.
-        """
-        async with self.bot_lock:
-            # 1. Clean up expired floods
-            self._cleanup_flooded_tokens()
-            
-            # 2. Try to get the user's currently assigned bot
-            if user_id in self.user_token_map and self.user_token_map[user_id] in self.available_tokens:
-                token = self.user_token_map[user_id]
-                logger.debug(f"User {user_id} assigned to existing token ...{token[-4:]}")
-                return self.bots[token]
-            
-            # 3. Choose a new token (Round-robin or random from available)
-            available_list = list(self.available_tokens)
-            if not available_list:
-                # All tokens are flooded, fall back to a random one, hoping for recovery
-                token = random.choice(list(self.bots.keys()))
-                logger.warning(f"All tokens are flooded. Falling back to ...{token[-4:]}")
-            else:
-                # Simple random choice for load distribution
-                token = random.choice(available_list)
-
-            # 4. Assign and return
-            if user_id is not None:
-                self.user_token_map[user_id] = token
-            logger.debug(f"User {user_id} assigned to new token ...{token[-4:]}")
-            return self.bots[token]
-            
-    # FIX: Made this function synchronous to prevent coroutine object error in bot.py lifespan
-    def get_main_bot(self) -> Bot: 
-        """Always return the first bot for main operations (webhook setup, admin msgs etc.)"""
-        return next(iter(self.bots.values()))
-
-    def _cleanup_flooded_tokens(self):
-        """Removes tokens from the flooded list if their recovery time has passed."""
-        now = datetime.now(timezone.utc)
-        keys_to_remove = [t for t, rt in self.flooded_tokens.items() if rt < now]
-        
-        for token in keys_to_remove:
-            self.flooded_tokens.pop(token, None)
-            self.available_tokens.add(token)
-            logger.info(f"Token ...{token[-4:]} recovered from flood limit.")
-
-    async def mark_token_flooded(self, token: str, retry_after: int = 60):
-        """Marks a token as flooded and removes it from the available set."""
-        async with self.bot_lock:
-            recovery_time = datetime.now(timezone.utc) + timedelta(seconds=retry_after + 5)
-            self.flooded_tokens[token] = recovery_time
-            self.available_tokens.discard(token)
-            logger.warning(f"Token ...{token[-4:]} marked as flooded. Recovery at {recovery_time.strftime('%H:%M:%S')}. Available tokens remaining: {len(self.available_tokens)}")
-            
-            # Remove all users currently assigned to this flooded token
-            users_to_unassign = [u for u, t in self.user_token_map.items() if t == token]
-            for user_id in users_to_unassign:
-                self.user_token_map.pop(user_id, None)
-
-    async def close_all_sessions(self):
-        """Closes all underlying bot sessions."""
-        for token, bot in self.bots.items():
+        # Initialize extra bots
+        count = 0
+        for token in tokens:
+            # Skip if it's the main bot token to avoid duplicates
+            if token == self.main_bot.token:
+                continue
             try:
-                if bot.session:
-                    await bot.session.close()
-                    logger.info(f"Bot session ...{token[-4:]} closed.")
+                new_bot = Bot(token=token)
+                # Verify token validity
+                await new_bot.get_me()
+                self.bots.append(new_bot)
+                count += 1
             except Exception as e:
-                logger.error(f"Error closing bot session ...{token[-4:]}: {e}")
+                logger.error(f"Worker bot initialization failed for token ending ...{token[-5:]}: {e}")
+
+        self.active = True
+        logger.info(f"TokenManager: {count} extra worker bots loaded. Total pool: {len(self.bots)}")
+
+    async def stop(self):
+        """Closes all worker bot sessions."""
+        for bot in self.bots:
+            if bot != self.main_bot:
+                try:
+                    await bot.session.close()
+                except:
+                    pass
+        logger.info("TokenManager: All worker sessions closed.")
+
+    async def _get_next_bot(self) -> Bot:
+        """Rotates to the next bot in a Round-Robin fashion."""
+        async with self.lock:
+            self.current_index = (self.current_index + 1) % len(self.bots)
+            return self.bots[self.current_index]
+
+    async def smart_copy_message(self, chat_id: int, from_chat_id: int, message_id: int, reply_markup=None) -> bool:
+        """
+        Tries to copy message using available bots.
+        Logic:
+        1. Try current bot.
+        2. If 429 (Flood), switch to next bot and retry.
+        3. If Forbidden (User didn't start worker), fallback to Main Bot.
+        """
+        # Attempt up to 3 times (or number of bots)
+        max_attempts = len(self.bots) if len(self.bots) > 1 else 1
+        
+        # Always start with Main Bot if it's a privacy/permission sensitive call, 
+        # but for load balancing we try the pool.
+        # However, COPY message requires user to have started the specific bot.
+        # Strategy: Try Primary First. If Flood, try others.
+        
+        # Attempt 1: Try with the current active bot (usually Main)
+        try:
+            await self.main_bot.copy_message(
+                chat_id=chat_id, 
+                from_chat_id=from_chat_id, 
+                message_id=message_id, 
+                reply_markup=reply_markup
+            )
+            return True
+        except TelegramRetryAfter as e:
+            logger.warning(f"Main Bot hit FloodWait ({e.retry_after}s). Switching to workers...")
+            # Fallthrough to rotation logic
+        except Exception as e:
+            # Other errors (Block, etc) - return False immediately
+            logger.error(f"Copy failed on Main Bot: {e}")
+            return False
+
+        # If we are here, Main Bot is flooded. Try workers.
+        # We iterate through workers.
+        for _ in range(max_attempts):
+            bot = await self._get_next_bot()
+            if bot.id == self.main_bot.id: 
+                continue # We already tried main
+
+            try:
+                await bot.copy_message(
+                    chat_id=chat_id, 
+                    from_chat_id=from_chat_id, 
+                    message_id=message_id, 
+                    reply_markup=reply_markup
+                )
+                return True
+            except TelegramForbiddenError:
+                # User hasn't started this worker bot. This is expected.
+                # Just continue to next bot.
+                continue
+            except TelegramRetryAfter:
+                # This worker is also flooded. Next.
+                continue
+            except Exception as e:
+                logger.error(f"Worker bot failed: {e}")
+                continue
+        
+        return False
+
+    async def smart_send_document(self, chat_id: int, document: str, reply_markup=None) -> bool:
+        """Same logic as copy_message but for send_document."""
+        try:
+            await self.main_bot.send_document(chat_id=chat_id, document=document, reply_markup=reply_markup)
+            return True
+        except TelegramRetryAfter as e:
+            logger.warning(f"Main Bot hit FloodWait sending doc ({e.retry_after}s). Switching...")
+        except Exception:
+            return False
+
+        for _ in range(len(self.bots)):
+            bot = await self._get_next_bot()
+            if bot.id == self.main_bot.id: continue
+
+            try:
+                await bot.send_document(chat_id=chat_id, document=document, reply_markup=reply_markup)
+                return True
+            except (TelegramForbiddenError, TelegramRetryAfter):
+                continue
+            except Exception:
+                continue
+        return False
