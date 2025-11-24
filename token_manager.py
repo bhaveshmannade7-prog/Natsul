@@ -100,29 +100,10 @@ class TokenManager:
         logger.info("TokenManager: Sabhi bot sessions close ho gaye।")
 
 
-# --- NAYA WRAPPER FUNCTION ---
-
 async def token_manager_safe_tg_call(
     coro: asyncio.Future, 
     token_manager: TokenManager, 
     timeout: int, 
     semaphore: asyncio.Semaphore | None = None
 ):
-    """
-    safe_tg_call ke liye wrapper. Token rotation logic add karta hai.
-    NOTE: Original `safe_tg_call` ke logic ko modify nahi kiya gaya hai.
-    """
-    
-    # Original safe_tg_call ko import karne ke liye, hum usko bot.py mein hi rakhenge.
-    # Hum yahaan uski functionality ko simulate ya use nahi kar sakte, sirf
-    # TokenManager ki taraf se bot ka object de sakte hain.
-    
-    # Iss function ko use nahi kiya ja sakta, kyunki `safe_tg_call` `bot.py` mein defined hai
-    # aur hume uske *andhar* koi badlaav nahi karna hai.
-    # Hum `bot.py` mein `safe_tg_call` ko modify nahi kar sakte.
-    
-    # Solution: `bot.py` mein hi ek naya WRAPPER `safe_tg_call_wrapped` banayein.
-    
-    # Hum is module se sirf `TokenManager` class ko expose karenge.
     pass
-
