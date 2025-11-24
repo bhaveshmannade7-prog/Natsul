@@ -9,18 +9,13 @@ from datetime import datetime, timezone
 logger = logging.getLogger("bot.neondb")
 
 # --- Helper function (FUZZY SEARCH ke saath SYNCHRONIZED kiya gaya) ---
+# FIX: Yeh function ab bot.py ke STRICT clean logic ko mimic karega (No Spaces)
 def clean_text_for_search(text: str) -> str:
-    """Cleans text for search indexing (Synchronized with bot.py's safer version)।"""
+    """Strict cleaning for Sequence Match (No Spaces)।"""
     if not text: return ""
     text = text.lower()
-    # Separators like dot, underscore ko space mein badle
-    text = re.sub(r"[._\-]+", " ", text)
-    # Sirf a-z aur 0-9 rakhein
-    text = re.sub(r"[^a-z0-9\s]+", "", text)
-    # Season info remove karein
     text = re.sub(r"\b(s|season)\s*\d{1,2}\b", "", text)
-    # Extra space hatayein
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"[^a-z0-9]+", "", text) # FIX: No spaces
     return text
 
 class NeonDB:
@@ -74,8 +69,8 @@ class NeonDB:
                 except Exception as e:
                     logger.warning(f"ALTER TABLE command mein mamooli error (shayad pehle se tha): {e}")
 
-                # --- Python logic ko SQL FUNCTION ke roop mein banayein ---
-                # NOTE: Yeh SQL function database.py ke logic ko mimic karta hai।
+                # --- FIX 1: Python strict logic ko SQL FUNCTION ke roop mein banayein ---
+                # Naya function spaces ko hata dega।
                 await conn.execute("""
                     CREATE OR REPLACE FUNCTION f_clean_text_for_search(text TEXT)
                     RETURNS TEXT AS $$
@@ -87,14 +82,10 @@ class NeonDB:
                         END IF;
                         
                         cleaned_text := lower(text);
-                        -- Dots/Underscores ko space se badle (database.py jaisa)
-                        cleaned_text := regexp_replace(cleaned_text, '[._\-]+', ' ', 'g');
-                        -- Sirf a-z aur 0-9 rakhein
-                        cleaned_text := regexp_replace(cleaned_text, '[^a-z0-9\s]+', '', 'g');
-                        -- Season info remove karein
+                        -- Season info remove karein (Note: \y word boundary PostgreSQL-specific hai)
                         cleaned_text := regexp_replace(cleaned_text, '\y(s|season)\s*\d{1,2}\y', '', 'g');
-                        -- Extra space hatayein
-                        cleaned_text := trim(regexp_replace(cleaned_text, '\s+', ' ', 'g'));
+                        -- FIX: Sirf a-z aur 0-9 rakhein (saare non-alphanumeric, spaces ko bhi hata kar)
+                        cleaned_text := regexp_replace(cleaned_text, '[^a-z0-9]+', '', 'g');
                         
                         RETURN cleaned_text;
                     END;
@@ -105,6 +96,7 @@ class NeonDB:
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_file_unique_id ON movies (file_unique_id);")
                 await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_message_channel ON movies (message_id, channel_id);")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_imdb_id ON movies (imdb_id);")
+                # FIX 2: title_search_vector ab clean_title (no-space) par banega।
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_movie_search_vector ON movies USING GIN(title_search_vector);")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_clean_title_trgm ON movies USING GIN (clean_title gin_trgm_ops);")
 
@@ -114,6 +106,7 @@ class NeonDB:
                     RETURNS TRIGGER AS $$
                     BEGIN
                         NEW.clean_title := f_clean_text_for_search(NEW.title);
+                        -- FIX 3: FTS search vector clean_title (no space) par banayein।
                         NEW.title_search_vector :=
                             setweight(to_tsvector('simple', COALESCE(NEW.clean_title, '')), 'A');
                         RETURN NEW;
@@ -124,7 +117,7 @@ class NeonDB:
                 await conn.execute("""
                     DROP TRIGGER IF EXISTS ts_movie_title_update ON movies;
                     CREATE TRIGGER ts_movie_title_update
-                    BEFORE INSERT OR UPDATE ON movies
+                    BEFORE INSERT OR UPDATE OF title ON movies
                     FOR EACH ROW
                     EXECUTE FUNCTION update_movie_search_vector();
                 """)
@@ -220,16 +213,17 @@ class NeonDB:
             logger.error("NeonDB pool (rebuild_fts_vectors) ready nahi hai।")
             return -1
         
+        # FIX: Trigger ko manually chalao un rows par jinka clean_title NULL/old ho
         query = """
             UPDATE movies
             SET 
-                clean_title = f_clean_text_for_search(title),
-                title_search_vector = setweight(to_tsvector('simple', COALESCE(f_clean_text_for_search(title), '')), 'A')
+                title = title  -- Dummy update to fire the BEFORE INSERT OR UPDATE trigger
             WHERE clean_title IS NULL OR clean_title != f_clean_text_for_search(title);
         """
         
         try:
             async with self.pool.acquire() as conn:
+                # Hum naye clean logic ko check kar rahe hain. Agar match nahi hua, to update fire hoga।
                 result = await conn.execute(query)
                 updated_count = int(result.split()[-1]) if result else 0
                 logger.info(f"NeonDB: {updated_count} NULL/old FTS/CleanTitle vectors ko rebuild kiya।")
@@ -355,7 +349,9 @@ class NeonDB:
                 status = await conn.executemany(query, data_to_insert)
                 
                 if status:
-                    inserted_count = int(status.split()[-1])
+                    # FIX: Inserted count ko theek se parse karein
+                    match = re.search(r'INSERT \d+ (\d+)', status)
+                    inserted_count = int(match.group(1)) if match else 0
                     logger.info(f"NeonDB Sync: {inserted_count} naye records insert kiye।")
                 
                 processed_count = len(data_to_insert)
@@ -386,3 +382,4 @@ class NeonDB:
                 return {"title": "N/A", "clean_title": "DB Khaali Hai"}
         except Exception as e:
             return {"title": "Error", "clean_title": str(e)}
+
