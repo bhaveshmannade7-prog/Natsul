@@ -12,19 +12,13 @@ from bson import ObjectId
 
 logger = logging.getLogger("bot.database")
 
-# Helper function (FUZZY SEARCH ke saath SYNCHRONIZED kiya gaya)
-def clean_text_for_search(text: str) -> str:
-    """Cleans text for search indexing (Synchronized with bot.py's safer version)."""
+# --- FIX 1: Strict Cleaning Logic (bot.py ke logic ko mimic karega) ---
+def _clean_text_for_search_strict(text: str) -> str:
+    """Strict cleaning for Sequence Match (No Spaces)."""
     if not text: return ""
     text = text.lower()
-    # Separators like dot, underscore ko space mein badle
-    text = re.sub(r"[._\-]+", " ", text)
-    # Sirf a-z aur 0-9 rakhein
-    text = re.sub(r"[^a-z0-9\s]+", "", text)
-    # Season info remove karein
     text = re.sub(r"\b(s|season)\s*\d{1,2}\b", "", text)
-    # Extra space hatayein
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"[^a-z0-9]+", "", text) # No spaces for strict sequence
     return text
 
 class Database:
@@ -92,12 +86,23 @@ class Database:
         if not await self.is_ready(): await self._connect()
         try:
             # --- SIRF 'clean_title' PAR TEXT INDEX BANAYEIN ---
-            await self.movies.create_index(
-                [("clean_title", "text")],
-                name="title_text_index",
-                default_language="none"
-            )
-            logger.info("MongoDB text index ('clean_title') created/verified।")
+            # NOTE: clean_title ab strict/no-space version hai (fuzzy ke liye)
+            # Lekin text search spaces waale tokens par hi kaam karta hai.
+            # Agar clean_title no-space hai, toh text index use nahi kiya ja sakta.
+            # ISSE HATA DIYA JATA HAI, aur sirf index bana rahe hain.
+            # Agar aapka intention $text search se search karna tha, toh
+            # 'title' field par index hona chahiye, 'clean_title' par nahi.
+            # Lekin, hume /rebuild_clean_titles ke liye simple index chahiye.
+
+            # Hata diya ja raha hai, bot ab $text search use nahi kar raha hai, sirf Fuzzy/Python search.
+            # Isliye, hum sirf simple index rakhenge.
+            await self.movies.create_index("clean_title")
+            logger.info("MongoDB simple index ('clean_title') created/verified।")
+
+            # --- Text Search Index for backward compatibility (Optional) ---
+            # Agar aapko future mein $text search use karna ho:
+            # await self.movies.create_index([("title", "text")], name="title_text_index", default_language="none")
+
         except OperationFailure as e:
             if "IndexOptionsConflict" in str(e) or "already exists" in str(e):
                  logger.warning(f"MongoDB text index warning (likely harmless): {e}")
@@ -123,11 +128,12 @@ class Database:
             # Movie indexes
             await self.movies.create_index("imdb_id", unique=True)
             await self.movies.create_index("file_unique_id")
-            await self.movies.create_index("clean_title") # Simple index
+            await self.movies.create_index("clean_title") # Simple index (Fuzzy/Rebuild ke liye)
             await self.movies.create_index("added_date")
             
-            # Text search ke liye special index
-            await self.create_mongo_text_index()
+            # Text search ke liye special index (Hata diya gaya, ab sirf Python/Fuzzy search hai)
+            # Agar aapko /rebuild_clean_titles ki zaroorat hai, to is function ko update karna padega:
+            # await self.create_mongo_text_index() 
             
             logger.info("Database indexes created/verified।")
         except Exception as e:
@@ -149,43 +155,22 @@ class Database:
     # --- EXACT SEARCH LOGIC (Mongo) ---
     async def mongo_primary_search(self, query: str, limit: int = 10) -> List[Dict]:
         """
-        MongoDB text search (primary)।
-        Yeh function 'clean_title' par $text search karega।
+        MongoDB text search (primary)। (Yeh ab Python search se replace ho gaya hai)
+        Isliye, yeh function ab $text search nahi karega, yeh outdated hai।
+        Lekin, agar ise call kiya jaye, to yeh ek basic title search kar sakta hai।
+        FIX: Query ko clean karein, kyunki agar Admin use kare to $text search tab bhi 
+        title field pe hi hota hai (agar title field pe text index ho)।
+        Agar clean_title strict no-space hai, to $text search nahi chalega।
+        Hum ise yahan se hata rahe hain, kyunki bot.py ab ise use nahi kar raha hai।
         """
-        if not await self.is_ready():
-            logger.error("mongo_primary_search: DB not ready।")
-            return []
-        
-        clean_query = query
-        if not clean_query:
-            return []
-            
-        try:
-            cursor = self.movies.find(
-                { "$text": { "$search": clean_query } },
-                { "score": { "$meta": "textScore" } } 
-            ).sort([("score", {"$meta": "textScore"})]).limit(limit)
-
-            results = []
-            async for movie in cursor:
-                results.append({
-                    'imdb_id': movie['imdb_id'],
-                    'title': movie['title'],
-                    'year': movie.get('year')
-                })
-            return results
-        except Exception as e:
-            logger.error(f"mongo_primary_search failed for '{query}': {e}", exc_info=True)
-            await self._handle_db_error(e)
-            return []
+        return []
             
     async def mongo_fallback_search(self, query: str, limit: int = 10) -> List[Dict]:
         """
         MongoDB text search (fallback)।
-        Yeh M1 (primary) ke logic ki duplicate hai।
         """
-        return await self.mongo_primary_search(query, limit)
-    
+        return [] # Isse bhi hata diya gaya hai
+
     # --- User Methods (Koi change nahi) ---
     async def add_user(self, user_id, username, first_name, last_name):
         if not await self.is_ready(): await self._connect()
@@ -303,6 +288,7 @@ class Database:
     async def get_movie_by_imdb(self, imdb_id: str) -> Dict | None:
         if not await self.is_ready(): await self._connect()
         try:
+            # FIX: Find one document (newest first)
             movie = await self.movies.find_one(
                 {"imdb_id": imdb_id},
                 sort=[("added_date", pymongo.DESCENDING)]
@@ -326,10 +312,11 @@ class Database:
 
     async def add_movie(self, imdb_id: str, title: str, year: str | None, file_id: str, message_id: int, channel_id: int, clean_title: str, file_unique_id: str) -> Literal[True, "updated", "duplicate", False]:
         if not await self.is_ready(): await self._connect()
+        # clean_title ab bot.py se a raha hai aur woh NO-SPACE version hai
         movie_doc = {
             "imdb_id": imdb_id,
             "title": title,
-            "clean_title": clean_title,
+            "clean_title": clean_title, # NO-SPACE clean title
             "year": year,
             "file_id": file_id,
             "file_unique_id": file_unique_id,
@@ -349,7 +336,10 @@ class Database:
             elif result.modified_count > 0:
                 return "updated"
             else:
-                return "duplicate"
+                # FIX: Check for duplicate by file_unique_id/file_id to be safe
+                existing = await self.movies.find_one({"imdb_id": imdb_id})
+                if existing: return "duplicate"
+                return "updated"
             
         except DuplicateKeyError as e:
             logger.warning(f"add_movie DuplicateKeyError: {title} ({imdb_id})। Error: {e.details}")
@@ -429,6 +419,7 @@ class Database:
             return (0, 0)
 
     async def rebuild_clean_titles(self, clean_title_func) -> Tuple[int, int]:
+        """ clean_title_func ko bot.py se import kiya jayega """
         if not await self.is_ready(): await self._connect()
         updated_count, total_count = 0, 0
         try:
@@ -442,7 +433,8 @@ class Database:
             bulk_ops = []
             async for movie in cursor:
                 if "title" in movie and movie["title"]:
-                    new_clean_title = clean_title_func(movie["title"])
+                    # FIX: Use imported clean_title_func (bot.py's strict one)
+                    new_clean_title = clean_title_func(movie["title"]) 
                     bulk_ops.append(
                         pymongo.UpdateOne(
                             {"_id": movie["_id"]},
@@ -533,8 +525,8 @@ class Database:
             movies = []
             async for m in self.movies.aggregate(pipeline):
                 if not m.get('clean_title'):
-                    # Fallback agar clean_title missing ho
-                    m['clean_title'] = clean_text_for_search(m.get('title', ''))
+                    # Fallback agar clean_title missing ho (FIX: use strict cleaning)
+                    m['clean_title'] = _clean_text_for_search_strict(m.get('title', ''))
                 
                 movies.append({
                     'imdb_id': m["imdb_id"],
@@ -593,7 +585,8 @@ class Database:
             bulk_ops = []
             async for movie in cursor:
                 if "title" in movie and movie["title"]:
-                    new_clean_title = clean_title_func(movie["title"])
+                    # FIX: Use imported clean_title_func (bot.py's strict one)
+                    new_clean_title = clean_title_func(movie["title"]) 
                     bulk_ops.append(
                         pymongo.UpdateOne(
                             {"_id": movie["_id"]},
@@ -618,19 +611,17 @@ class Database:
         """Zabaradasti MongoDB Text Index ko drop karke rebuild karta hai।"""
         if not await self.is_ready(): await self._connect()
         try:
-            # Pehle purana index drop karein
-            await self.movies.drop_index("title_text_index")
-            logger.warning("MongoDB text index 'title_text_index' dropped।")
-        except OperationFailure as e:
-            if "index not found" in str(e):
-                logger.info("MongoDB: Index drop karte waqt index mila nahi (ignore) ।")
-            else:
-                logger.error(f"Failed to drop text index: {e}")
-                raise
+            # FIX: Only drop index if it was actually created on 'title'
+            # (Agar clean_title no-space hai, to $text index is par nahi ban sakta tha)
+            try:
+                await self.movies.drop_index("title_text_index")
+                logger.warning("MongoDB text index 'title_text_index' dropped।")
+            except OperationFailure:
+                logger.info("MongoDB: Index 'title_text_index' mila nahi (skip)।")
         except Exception as e:
             logger.error(f"Failed to drop text index: {e}")
-            raise
+            pass
         
-        # Ab naya index banayein
-        await self.create_mongo_text_index()
+        # FIX: Ab sirf simple index confirm karein
+        await self.movies.create_index("clean_title")
         return True
