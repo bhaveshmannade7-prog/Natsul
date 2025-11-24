@@ -1,79 +1,77 @@
+# cache_manager.py
+import asyncio
 import logging
+from typing import Optional, Any
 import json
 import os
-import asyncio
-from typing import Optional, Any, Dict, List
+
+try:
+    import redis.asyncio as redis
+except ImportError:
+    logging.critical("--- redis.asyncio library nahi mili! ---")
+    logging.critical("Kripya install karein: pip install redis")
+    raise SystemExit("Missing dependency: redis")
 
 logger = logging.getLogger("bot.cache_manager")
 
-class RedisCache:
-    def __init__(self):
-        self.redis = None
-        self.enabled = False
-        self.ttl = 3600  # 1 Hour Cache
+class CacheManager:
+    """
+    Async Redis client ko manage karta hai। Agar REDIS_URL missing hai toh gracefully fail karta hai।
+    """
+    
+    def __init__(self, redis_url: Optional[str]):
+        self.redis_url = redis_url
+        self.client: Optional[redis.Redis] = None
+        self.is_ready = False
+        
+        if not self.redis_url:
+            logger.warning("CacheManager: REDIS_URL environment mein nahi mila. Cache disable hai।")
 
-    async def connect(self, redis_url: str):
-        if not redis_url:
-            logger.info("Redis URL missing. Caching disabled.")
+    async def init_cache(self):
+        """Redis connection pool shuru karta hai।"""
+        if not self.redis_url:
+            self.is_ready = False
             return
 
         try:
-            import redis.asyncio as redis
-            self.redis = redis.from_url(redis_url, decode_responses=True)
-            await self.redis.ping()
-            self.enabled = True
-            logger.info("✅ Redis Cache Connected Successfully.")
-        except ImportError:
-            logger.critical("Redis library not installed. Install via: pip install redis")
-            self.enabled = False
+            self.client = redis.from_url(self.redis_url, encoding="utf-8", decode_responses=True)
+            # Connection check
+            await self.client.ping()
+            self.is_ready = True
+            logger.info("CacheManager: Redis connection pool safal. Cache active hai।")
         except Exception as e:
-            logger.error(f"Redis Connection Failed: {e}. Running without cache.")
-            self.enabled = False
+            self.client = None
+            self.is_ready = False
+            logger.error(f"CacheManager: Redis connection fail ho gaya: {e}. Cache disable hai।", exc_info=False)
+
+    async def get_json(self, key: str) -> Optional[Any]:
+        """Key se JSON data nikalta hai।"""
+        if not self.is_ready: return None
+        try:
+            data = await self.client.get(key)
+            if data:
+                return json.loads(data)
+            return None
+        except Exception as e:
+            logger.error(f"CacheManager GET error for key {key}: {e}", exc_info=False)
+            return None
+
+    async def set_json(self, key: str, value: Any, ttl: int = 3600):
+        """JSON data ko cache mein store karta hai।"""
+        if not self.is_ready: return
+        try:
+            data = json.dumps(value)
+            await self.client.set(key, data, ex=ttl)
+        except Exception as e:
+            logger.error(f"CacheManager SET error for key {key}: {e}", exc_info=False)
 
     async def close(self):
-        if self.redis:
-            await self.redis.close()
-            logger.info("Redis connection closed.")
+        """Connection pool close karta hai।"""
+        if self.client and self.is_ready:
+            try:
+                await self.client.close()
+                logger.info("CacheManager: Redis pool close ho gaya।")
+            except Exception as e:
+                logger.error(f"CacheManager pool close error: {e}")
+        self.is_ready = False
 
-    def _get_key(self, query: str) -> str:
-        # Normalize key
-        clean = "".join(e for e in query if e.isalnum()).lower()
-        return f"search:v5:{clean}"
-
-    async def get_search_results(self, query: str) -> Optional[List[Dict]]:
-        """Fetch results from Redis."""
-        if not self.enabled or not self.redis:
-            return None
-        
-        try:
-            key = self._get_key(query)
-            data = await self.redis.get(key)
-            if data:
-                # Reset TTL on hit (Slide expiry)
-                await self.redis.expire(key, self.ttl)
-                return json.loads(data)
-        except Exception as e:
-            logger.error(f"Redis Read Error: {e}")
-            return None
-        return None
-
-    async def set_search_results(self, query: str, results: List[Dict]):
-        """Save results to Redis."""
-        if not self.enabled or not self.redis or not results:
-            return
-
-        try:
-            key = self._get_key(query)
-            # Only cache minimal data to save RAM
-            minimal_results = [
-                {
-                    'imdb_id': r.get('imdb_id'),
-                    'title': r.get('title'),
-                    'year': r.get('year'),
-                    'score': r.get('score'),
-                    'match_type': 'cached'
-                } for r in results
-            ]
-            await self.redis.setex(key, self.ttl, json.dumps(minimal_results))
-        except Exception as e:
-            logger.error(f"Redis Write Error: {e}")
