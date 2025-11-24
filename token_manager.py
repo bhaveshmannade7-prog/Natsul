@@ -80,7 +80,8 @@ class TokenManager:
             logger.debug(f"User {user_id} assigned to new token ...{token[-4:]}")
             return self.bots[token]
             
-    async def get_main_bot(self) -> Bot:
+    # FIX: Made this function synchronous to prevent coroutine object error in bot.py lifespan
+    def get_main_bot(self) -> Bot: 
         """Always return the first bot for main operations (webhook setup, admin msgs etc.)"""
         return next(iter(self.bots.values()))
 
