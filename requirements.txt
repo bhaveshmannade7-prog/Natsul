@@ -1,20 +1,14 @@
-# requirements.txt
-aiogram==3.10.0
-fastapi==0.111.1
-uvicorn[standard]==0.30.3
-python-multipart==0.0.9
-aiohttp==3.9.5
-python-dotenv==1.0.1
-aiofiles==23.2.1
-httpx==0.28.1
-uvloop==0.22.1
-motor==3.7.1
-pymongo==4.15.3
-certifi==2025.10.5
-asyncpg==0.29.0
-rapidfuzz==3.14.3
-# --- OLD: redis (v7.x)
-# --- OLD: aioredis==2
-# --- NAYA FIX: aioredis ko hataakar sirf redis ka latest async version rakhein
-redis==5.0.1  # Latest stable version jo async support karta hai
-gunicorn==23.0.0
+pip install -r requirements.txt
+# requirements.txt content:
+aiogram~=3.0
+fastapi~=0.104
+uvicorn[standard]~=0.23
+python-dotenv
+motor~=3.3
+pymongo~=4.5
+asyncpg~=0.28
+certifi~=2023.7
+rapidfuzz~=6.0
+uvloop~=0.18.0
+# NAYI ZAROORAT:
+redis[async]~=5.0 
