@@ -18,8 +18,8 @@ PRIORITY_USER_ACTION = 1
 PRIORITY_BACKGROUND = 2
 
 # Max workers ko ENV se load karein
-# FIX: Yeh value ab Render ENV se aayegi, default 40 free-tier ke liye high hai, lekin code change nahi karenge
-QUEUE_CONCURRENCY = int(os.getenv("QUEUE_CONCURRENCY", "40"))
+# FIX: Yeh value ab Render ENV se aayegi, default 10 set kiya gaya hai for safety (optimization)
+QUEUE_CONCURRENCY = int(os.getenv("QUEUE_CONCURRENCY", "10"))
 
 class PriorityQueueWrapper:
     """
