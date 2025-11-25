@@ -6,11 +6,12 @@ import psutil # Naya dependency: Process monitoring
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
 
-# Local imports from your project
+# FIX: Circular import se bachne ke liye safe_tg_call ko core_utils se import karein
+from core_utils import safe_tg_call 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from queue_wrapper import priority_queue, PRIORITY_ADMIN, QUEUE_CONCURRENCY
-from bot import safe_tg_call 
+
 
 logger = logging.getLogger("bot.watchdog")
 
@@ -128,7 +129,7 @@ class SmartWatchdog:
     async def _monitor_tg_and_webhook(self):
         """Telegram flood lock, token status aur webhook status check karta hai।"""
         
-        # 1. Check Token Lock/Flood Status
+        # 1. Check Token Rotation Fail / Flood-Lock Status
         try:
             # Low-cost Telegram operation (getting chat info for admin is safe)
             await safe_tg_call(
