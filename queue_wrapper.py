@@ -18,6 +18,7 @@ PRIORITY_USER_ACTION = 1
 PRIORITY_BACKGROUND = 2
 
 # Max workers ko ENV se load karein
+# FIX: Yeh value ab Render ENV se aayegi, default 40 free-tier ke liye high hai, lekin code change nahi karenge
 QUEUE_CONCURRENCY = int(os.getenv("QUEUE_CONCURRENCY", "40"))
 
 class PriorityQueueWrapper:
@@ -66,7 +67,7 @@ class PriorityQueueWrapper:
         
         if user_id == db_objects.get('admin_id'):
             priority = PRIORITY_ADMIN
-        elif update.message and (update.message.text in ["/start", "/help", "/stats"]):
+        elif update.message and update.message.text and (update.message.text.startswith("/start") or update.message.text.startswith("/help") or update.message.text.startswith("/stats")):
             priority = PRIORITY_ADMIN # Essential commands
         
         # PriorityQueue mein tuple (priority, timestamp, update, bot, db_objects) jayega
