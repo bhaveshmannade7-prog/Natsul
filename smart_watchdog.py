@@ -59,6 +59,7 @@ class SmartWatchdog:
 
     async def _monitor_cpu_and_freeze(self):
         """CPU high load aur Event Loop freeze ko monitor karta hai।"""
+        # Rule: CPU usage reduction strategies
         try:
             # CPU utilization (non-blocking call, can take time)
             cpu_percent = psutil.cpu_percent(interval=None) 
@@ -71,7 +72,7 @@ class SmartWatchdog:
                     f"Current CPU usage: {cpu_percent:.2f}%. Load {CPU_ALERT_THRESHOLD}% threshold se upar hai. Workers/Threads kaafi busy hain."
                 )
 
-            # 2. Queue Stuck / Worker Freeze Detect (Queue stuck / worker freeze detect kare)
+            # 2. Queue Stuck / Worker Freeze Detection (Queue stuck / worker freeze detect kare)
             queue_size = priority_queue._queue.qsize()
             
             if queue_size > 0:
@@ -101,7 +102,7 @@ class SmartWatchdog:
         """DB connectivity aur overload status check karta hai।"""
         
         # 1. MongoDB Health Check (Low latency ping)
-        mongo_ready = await self.db_primary.is_ready() # Direct call, safe_db_call is not needed here
+        mongo_ready = await self.db_primary.is_ready() 
         if not mongo_ready:
              await self._send_alert(
                  "❌ MONGO DB OFFLINE/DISCONNECTED",
@@ -125,9 +126,9 @@ class SmartWatchdog:
             )
 
     async def _monitor_tg_and_webhook(self):
-        """Telegram flood lock, token status aur webhook inactivity check karta hai।"""
+        """Telegram flood lock, token status aur webhook status check karta hai।"""
         
-        # 1. Check Token Rotation Fail / Flood-Lock Detect
+        # 1. Check Token Lock/Flood Status
         try:
             # Low-cost Telegram operation (getting chat info for admin is safe)
             await safe_tg_call(
@@ -164,6 +165,10 @@ class SmartWatchdog:
 
     async def run_watchdog(self):
         """Main periodic watchdog loop।"""
+        if not WATCHDOG_ENABLED:
+            logger.warning("Watchdog is disabled via WATCHDOG_ENABLED=False in .env.")
+            return
+
         self.is_running = True
         logger.info(f"Smart Watchdog started (Interval: {CHECK_INTERVAL}s).")
         
