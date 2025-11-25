@@ -9,7 +9,7 @@ import pymongo
 from pymongo.errors import ConnectionFailure, DuplicateKeyError, OperationFailure
 import certifi # SSL Fix
 from bson import ObjectId
-import os 
+import os # Naya import
 
 # --- ADD Redis Import ---
 try:
@@ -154,7 +154,7 @@ class Database:
 
     # --- NAYE FUNCTIONS: Cross-Process Lock ---
     async def check_if_lock_exists(self, lock_name: str) -> bool:
-        """Checks if a non-expired lock exists। (Used for Webhook setup skip)"""
+        """FIX for AttributeError: Checks if a non-expired lock exists। (Used for Webhook setup skip)"""
         if not await self.is_ready(): return False
         try:
             # Check if an unexpired lock exists
@@ -204,9 +204,7 @@ class Database:
         """Distributed lock release karta hai।"""
         if not await self.is_ready(): return False
         try:
-            # Sirf current worker ka lock delete karein (Process ID match karke)
-            # Lekin, agar lock expire ho jaye aur koi doosra worker acquire kar le, toh PID check fail ho jayega.
-            # Safety ke liye, hum sirf lock_name se delete karenge jab acquisition safal ho
+            # Release lock, without checking PID (relying on TTL and acquisition update for robustness)
             result = await self.locks.delete_one({"lock_name": lock_name})
             if result.deleted_count > 0:
                  logger.info(f"MongoDB Lock '{lock_name}' released.")
