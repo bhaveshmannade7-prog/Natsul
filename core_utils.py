@@ -5,20 +5,23 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
 logger = logging.getLogger("bot.core_utils")
 
-# --- GLOBAL SEMAPHORES (bot.py se move kiye gaye) ---
+# ============ GLOBAL SEMAPHORES & CONSTANTS ============
+# Rule: Semaphores ko yahan define karein taaki multiple files mein access ho sake.
 TG_OP_TIMEOUT = 8
+DB_OP_TIMEOUT = 10 # Database timeout is needed by safe_db_call
+
+# Semaphores for safe concurrent DB/TG access
 DB_SEMAPHORE = asyncio.Semaphore(15)
 TELEGRAM_DELETE_SEMAPHORE = asyncio.Semaphore(10)
 TELEGRAM_COPY_SEMAPHORE = asyncio.Semaphore(15)
 TELEGRAM_BROADCAST_SEMAPHORE = asyncio.Semaphore(25)
 WEBHOOK_SEMAPHORE = asyncio.Semaphore(1) 
 
-# --- SAFE API CALL WRAPPER (bot.py se move kiya gaya) ---
-async def safe_db_call(coro, timeout=10, default=None):
+
+# --- SAFE API CALL WRAPPERS ---
+async def safe_db_call(coro, timeout=DB_OP_TIMEOUT, default=None):
     try:
-        # DB_SEMAPHORE ko yahan import karna mushkil hai, isliye hum isse core_utils mein define kar denge.
-        # Lekin DB_SEMAPHORE ka istemaal bot.py mein database.py calls ke liye hota hai. 
-        # Safety ke liye, hum isse yahaan define kar denge aur bot.py mein import karenge.
+        # DB_SEMAPHORE ko yahan use karein
         async with DB_SEMAPHORE: 
             return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
