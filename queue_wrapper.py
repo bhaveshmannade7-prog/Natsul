@@ -1,11 +1,11 @@
 # queue_wrapper.py
 import asyncio
 import logging
+import os
+from datetime import datetime, timezone
 from typing import Callable, Any, Dict, Coroutine, Optional, List
 from aiogram import types, Bot
 from aiogram.fsm.storage.memory import MemoryStorage
-from datetime import datetime, timezone
-import os
 
 logger = logging.getLogger("bot.queue")
 
@@ -18,7 +18,7 @@ PRIORITY_USER_ACTION = 1
 PRIORITY_BACKGROUND = 2
 
 # Max workers ko ENV se load karein
-# FIX: Yeh value ab Render ENV se aayegi, default 10 set kiya gaya hai for safety (optimization)
+# FIX: Default value ko 40 se kam karke 10 kiya gaya hai. (EC2 Free-Tier safety)
 QUEUE_CONCURRENCY = int(os.getenv("QUEUE_CONCURRENCY", "10"))
 
 class PriorityQueueWrapper:
