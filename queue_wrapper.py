@@ -18,8 +18,8 @@ PRIORITY_USER_ACTION = 1
 PRIORITY_BACKGROUND = 2
 
 # Max workers ko ENV se load karein
-# FIX: Default value ko 40 se kam karke 10 kiya gaya hai. (EC2 Free-Tier safety)
-QUEUE_CONCURRENCY = int(os.getenv("QUEUE_CONCURRENCY", "10"))
+# FIX: Default value ko 1 kiya gaya hai. User ko zyada chahiye toh ENV set karein.
+QUEUE_CONCURRENCY = int(os.getenv("QUEUE_CONCURRENCY", "1"))
 
 class PriorityQueueWrapper:
     """
