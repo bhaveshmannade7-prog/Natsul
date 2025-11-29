@@ -33,7 +33,7 @@ class RedisCacheLayer:
         self._lock = asyncio.Lock()
         
     async def init_cache(self):
-        """Connection pool banata hai।"""
+        """Connection pool banata hai (Auto-Fix URL Logic ke sath)।"""
         if not REDIS_AVAILABLE:
             logger.warning("Redis library nahi mili. Caching disabled.")
             return
@@ -44,8 +44,15 @@ class RedisCacheLayer:
             
         async with self._lock:
             try:
+                # --- FIX: URL format check ---
+                final_url = REDIS_URL.strip()
+                # Agar URL me scheme nahi hai, to maan ke chalo ye secure (rediss) hai (Upstash/Render ke liye)
+                if not final_url.startswith(("redis://", "rediss://", "unix://")):
+                    final_url = f"rediss://{final_url}"
+                    logger.info(f"⚠️ Redis URL corrected: Scheme 'rediss://' added automatically.")
+                
                 # Connection timeout ko kam rakhein to avoid blocking startup
-                self._pool = ConnectionPool.from_url(REDIS_URL, decode_responses=True, socket_timeout=5)
+                self._pool = ConnectionPool.from_url(final_url, decode_responses=True, socket_timeout=5)
                 self.redis = Redis(connection_pool=self._pool)
                 await self.redis.ping()
                 self._is_ready = True
@@ -148,7 +155,7 @@ class RedisCacheLayer:
             return None # Fallback to MongoDB
             
     # =======================================================
-    # +++++ OTHER CACHE OPS (For Future Proofing) +++++
+    # +++++ OTHER CACHE OPS (For Future Proofing & Limits) +++++
     # =======================================================
 
     async def get(self, key: str) -> Optional[str]:
@@ -160,6 +167,25 @@ class RedisCacheLayer:
         if not self.is_ready(): return False
         try: await self.redis.set(key, value, ex=ttl); return True
         except Exception as e: self._is_ready = False; logger.debug(f"Redis SET fail: {e}"); return False
+
+    # --- NEW METHODS NEEDED FOR REFRESH LIMIT LOGIC ---
+    async def incr(self, key: str) -> Optional[int]:
+        """Increment a counter key."""
+        if not self.is_ready(): return None
+        try: return await self.redis.incr(key)
+        except Exception as e: 
+            logger.error(f"Redis INCR fail: {e}")
+            self._is_ready = False
+            return None
+
+    async def expire(self, key: str, ttl: int) -> bool:
+        """Set expiration on a key."""
+        if not self.is_ready(): return False
+        try: return await self.redis.expire(key, ttl)
+        except Exception as e:
+            logger.error(f"Redis EXPIRE fail: {e}")
+            self._is_ready = False
+            return False
 
 # Global Redis Instance
 redis_cache = RedisCacheLayer()
