@@ -33,7 +33,7 @@ class RedisCacheLayer:
         self._lock = asyncio.Lock()
         
     async def init_cache(self):
-        """Connection pool banata hai (Auto-Fix URL Logic ke sath)।"""
+        """Connection pool banata hai (Smart URL Fixer ke sath)।"""
         if not REDIS_AVAILABLE:
             logger.warning("Redis library nahi mili. Caching disabled.")
             return
@@ -44,21 +44,30 @@ class RedisCacheLayer:
             
         async with self._lock:
             try:
-                # --- FIX: URL format check ---
+                # --- FIX: URL Cleaning Logic ---
                 final_url = REDIS_URL.strip()
-                # Agar URL me scheme nahi hai, to maan ke chalo ye secure (rediss) hai (Upstash/Render ke liye)
-                if not final_url.startswith(("redis://", "rediss://", "unix://")):
-                    final_url = f"rediss://{final_url}"
-                    logger.info(f"⚠️ Redis URL corrected: Scheme 'rediss://' added automatically.")
                 
-                # Connection timeout ko kam rakhein to avoid blocking startup
+                # 1. Agar user ne galti se 'https://' ya 'http://' daal diya hai (Common Copy-Paste Error)
+                if final_url.startswith("https://"):
+                    final_url = final_url.replace("https://", "rediss://", 1)
+                    logger.info("⚠️ Redis URL fixed: Replaced 'https://' with 'rediss://'")
+                elif final_url.startswith("http://"):
+                    final_url = final_url.replace("http://", "rediss://", 1)
+                    logger.info("⚠️ Redis URL fixed: Replaced 'http://' with 'rediss://'")
+                
+                # 2. Agar koi scheme hi nahi hai (e.g. "my-redis.upstash.io:6379")
+                elif not final_url.startswith(("redis://", "rediss://", "unix://")):
+                    final_url = f"rediss://{final_url}"
+                    logger.info("⚠️ Redis URL fixed: Auto-added 'rediss://' scheme.")
+                
+                # Connection timeout ko kam rakhein
                 self._pool = ConnectionPool.from_url(final_url, decode_responses=True, socket_timeout=5)
                 self.redis = Redis(connection_pool=self._pool)
                 await self.redis.ping()
                 self._is_ready = True
                 logger.info("✅ Redis cache connection safal.")
             except ConnectionError as e:
-                logger.error(f"❌ Redis connection error: {e}. Caching disabled. Falling back to MongoDB for throttling.", exc_info=False)
+                logger.error(f"❌ Redis connection error: {e}. Caching disabled. Falling back to MongoDB.", exc_info=False)
                 self._is_ready = False
                 self.redis = None
             except Exception as e:
@@ -106,10 +115,10 @@ class RedisCacheLayer:
         try:
             cutoff_timestamp = int(datetime.now(timezone.utc).timestamp()) - ACTIVE_WINDOW_SECONDS
             
-            # 1. Purane members ko hatao (score < cutoff) - O(log(N)+M)
+            # 1. Purane members ko hatao (score < cutoff)
             await self.redis.zremrangebyscore("active_users_set", min=0, max=cutoff_timestamp)
             
-            # 2. Active members ki count return karo - O(1)
+            # 2. Active members ki count return karo
             count = await self.redis.zcard("active_users_set")
             return count
             
@@ -155,7 +164,7 @@ class RedisCacheLayer:
             return None # Fallback to MongoDB
             
     # =======================================================
-    # +++++ OTHER CACHE OPS (For Future Proofing & Limits) +++++
+    # +++++ OTHER CACHE OPS (For Refresh Limits) +++++
     # =======================================================
 
     async def get(self, key: str) -> Optional[str]:
@@ -168,7 +177,6 @@ class RedisCacheLayer:
         try: await self.redis.set(key, value, ex=ttl); return True
         except Exception as e: self._is_ready = False; logger.debug(f"Redis SET fail: {e}"); return False
 
-    # --- NEW METHODS NEEDED FOR REFRESH LIMIT LOGIC ---
     async def incr(self, key: str) -> Optional[int]:
         """Increment a counter key."""
         if not self.is_ready(): return None
