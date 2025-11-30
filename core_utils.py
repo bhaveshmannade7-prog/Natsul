@@ -1,17 +1,15 @@
 # core_utils.py
 import asyncio
 import logging
-import inspect # New: Function/method type check ke liye
+# F.I.X: inspect import ki zaroorat nahi agar hum init_db ko directly await karein
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
 logger = logging.getLogger("bot.core_utils")
 
 # ============ GLOBAL SEMAPHORES & CONSTANTS ============
-# Rule: Semaphores ko yahan define karein taaki multiple files mein access ho sake.
 TG_OP_TIMEOUT = 8
-DB_OP_TIMEOUT = 10 # Database timeout is needed by safe_db_call
+DB_OP_TIMEOUT = 10 
 
-# Semaphores for safe concurrent DB/TG access
 DB_SEMAPHORE = asyncio.Semaphore(15)
 TELEGRAM_DELETE_SEMAPHORE = asyncio.Semaphore(10)
 TELEGRAM_COPY_SEMAPHORE = asyncio.Semaphore(15)
@@ -19,51 +17,39 @@ TELEGRAM_BROADCAST_SEMAPHORE = asyncio.Semaphore(25)
 WEBHOOK_SEMAPHORE = asyncio.Semaphore(1) 
 
 
-# --- SAFE API CALL WRAPPERS (F.I.X.E.D.) ---
-async def safe_db_call(coro_or_func, timeout=DB_OP_TIMEOUT, default=None):
-    # F.I.X: Get the current event loop (executor ko use karne ke liye)
-    loop = asyncio.get_running_loop()
-    
-    # F.I.X: Identify if the input is an awaitable coroutine or a blocking function/method
-    # Agar input ek coroutine hai (jaise motor ka call), to use seedha chalao
-    is_blocking_sync_call = not (asyncio.iscoroutine(coro_or_func) or inspect.isawaitable(coro_or_func))
-    
-    # F.I.X: Agar blocking function hai, to use executor mein daalo
-    # Blocking function/method ko Future mein wrap karein
-    if is_blocking_sync_call:
-        # Blocking I/O ko ThreadPoolExecutor mein daalein
-        # (DB methods jaise db_primary.get_user_count() ab blocking hain, unhe yahan daalein)
-        # Note: coro_or_func is now the callable function (method) and its args are not needed here
-        future_or_coro = loop.run_in_executor(None, coro_or_func)
-    else:
-        # Async coroutine/awaitable ko seedha await karein
-        future_or_coro = coro_or_func
-
+# --- SAFE API CALL WRAPPERS (F.I.X.E.D. for robustness and clarity) ---
+# F.I.X: Yahan par yeh maan rahe hain ki agar coro blocking hai to use call karne se pehle
+# uske method/function ka naam pass kiya jaayega, ya agar async hai to use call karke coroutine object pass kiya jaayega.
+# Blocking functions ko manually loop.run_in_executor mein dalenge.
+async def safe_db_call(coro, timeout=DB_OP_TIMEOUT, default=None):
+    # F.I.X: Agar coro awaitable nahi hai, to ise execute karne ke liye loop.run_in_executor ka use karein
+    if not asyncio.iscoroutine(coro):
+         # Agar yeh ek callable function/method hai (jaise init_db ko bina brackets ke pass karna), to yeh fail hoga
+         # Lekin agar aapko yahan blocking function chahiye, to use manually run_in_executor mein wrap karna chahiye
+         
+         # F.I.X: Yahan hum man rahe hain ki user ne pehle hi coroutine object pass kiya hai
+         # Agar yeh future/coroutine nahi hai, to hum isse bahar nikal jaayenge.
+         logger.error(f"SAFE_DB_CALL ERROR: Non-coroutine object passed for {getattr(coro, '__name__', 'unknown_func')}")
+         return default
+         
     try:
         # DB_SEMAPHORE ko yahan use karein
         async with DB_SEMAPHORE: 
-            return await asyncio.wait_for(future_or_coro, timeout=timeout)
+            return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
-        # F.I.X: Future ko cancel karna zaroori hai agar woh executor mein hai
-        if is_blocking_sync_call and isinstance(future_or_coro, asyncio.Future):
-            if not future_or_coro.done():
-                 future_or_coro.cancel()
-                 logger.warning(f"DB call timeout aur future cancel kiya gaya: {getattr(coro_or_func, '__name__', 'unknown_blocking_func')}")
-        
-        logger.error(f"DB call timeout: {getattr(coro_or_func, '__name__', 'unknown_coro_or_func')}")
+        logger.error(f"DB call timeout: {getattr(coro, '__name__', 'unknown_coro')}")
         return default
     except Exception as e:
-         logger.error(f"DB error in {getattr(coro_or_func, '__name__', 'unknown_coro_or_func')}: {e}", exc_info=True)
+         logger.error(f"DB error in {getattr(coro, '__name__', 'unknown_coro')}: {e}", exc_info=True)
+         # Note: Database class ka _handle_db_error yahan call nahi ho sakta
          return default
 
 
 async def safe_tg_call(coro, timeout=TG_OP_TIMEOUT, semaphore: asyncio.Semaphore | None = None):
     # Rule: DO NOT delete, rewrite, or “optimize” ANY existing working feature
-    # Note: Telegram calls are inherently async, so no run_in_executor is needed here.
     semaphore_to_use = semaphore or asyncio.Semaphore(1)
     try:
         async with semaphore_to_use:
-            # COPY_MESSAGE jaise calls mein rate-limit se bachne ke liye chota delay
             if semaphore: await asyncio.sleep(0.1) 
             return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError: 
