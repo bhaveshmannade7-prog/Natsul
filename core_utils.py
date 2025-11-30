@@ -1,7 +1,6 @@
 # core_utils.py
 import asyncio
 import logging
-# F.I.X: inspect import ki zaroorat nahi agar hum init_db ko directly await karein
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
 logger = logging.getLogger("bot.core_utils")
@@ -17,31 +16,27 @@ TELEGRAM_BROADCAST_SEMAPHORE = asyncio.Semaphore(25)
 WEBHOOK_SEMAPHORE = asyncio.Semaphore(1) 
 
 
-# --- SAFE API CALL WRAPPERS (F.I.X.E.D. for robustness and clarity) ---
-# F.I.X: Yahan par yeh maan rahe hain ki agar coro blocking hai to use call karne se pehle
-# uske method/function ka naam pass kiya jaayega, ya agar async hai to use call karke coroutine object pass kiya jaayega.
-# Blocking functions ko manually loop.run_in_executor mein dalenge.
+# --- SAFE API CALL WRAPPERS (Final Fix) ---
 async def safe_db_call(coro, timeout=DB_OP_TIMEOUT, default=None):
-    # F.I.X: Agar coro awaitable nahi hai, to ise execute karne ke liye loop.run_in_executor ka use karein
+    """
+    Async database coroutine (motor, asyncpg) ko execute karta hai,
+    timeout aur exceptions ko handle karta hai.
+    """
     if not asyncio.iscoroutine(coro):
-         # Agar yeh ek callable function/method hai (jaise init_db ko bina brackets ke pass karna), to yeh fail hoga
-         # Lekin agar aapko yahan blocking function chahiye, to use manually run_in_executor mein wrap karna chahiye
-         
-         # F.I.X: Yahan hum man rahe hain ki user ne pehle hi coroutine object pass kiya hai
-         # Agar yeh future/coroutine nahi hai, to hum isse bahar nikal jaayenge.
          logger.error(f"SAFE_DB_CALL ERROR: Non-coroutine object passed for {getattr(coro, '__name__', 'unknown_func')}")
          return default
          
     try:
-        # DB_SEMAPHORE ko yahan use karein
+        # DB_SEMAPHORE aur timeout ka use
         async with DB_SEMAPHORE: 
             return await asyncio.wait_for(coro, timeout=timeout)
     except asyncio.TimeoutError:
-        logger.error(f"DB call timeout: {getattr(coro, '__name__', 'unknown_coro')}")
+        logger.error(f"DB call timeout ({timeout}s): {getattr(coro, '__name__', 'unknown_coro')}")
+        # Connection Failure ko simulate karne ke liye None return karein (Failure State)
         return default
     except Exception as e:
+         # ConnectionFailure, OperationFailure, etc. catch honge
          logger.error(f"DB error in {getattr(coro, '__name__', 'unknown_coro')}: {e}", exc_info=True)
-         # Note: Database class ka _handle_db_error yahan call nahi ho sakta
          return default
 
 
