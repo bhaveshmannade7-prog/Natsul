@@ -1438,7 +1438,12 @@ async def no_url_join_callback(callback: types.CallbackQuery):
 # =======================================================
 # +++++ BOT HANDLERS: NAYA HYBRID SEARCH LOGIC +++++
 # =======================================================
-@dp.message(F.text & ~F.text.startswith("/") & (F.chat.type == "private"))
+@dp.message(
+    F.text
+    & ~F.text.startswith("/")
+    & (F.chat.type == "private")
+    & ~F.state.in_(AdStates)   # 🔥 IMPORTANT FIX
+)
 @handler_timeout(20)
 async def search_movie_handler(
     message: types.Message,
@@ -1449,8 +1454,8 @@ async def search_movie_handler(
     redis_cache: RedisCacheLayer,
     state: FSMContext
 ):
-    # 🔥 FIX: FSM state clear (bahut zaroori)
-    await state.clear()
+    # ⚠️ Yahan state.clear() MAT lagana
+    pass
     user = message.from_user
     if not user: return
     user_id = user.id
