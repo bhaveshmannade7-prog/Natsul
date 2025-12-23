@@ -1438,11 +1438,13 @@ async def no_url_join_callback(callback: types.CallbackQuery):
 # =======================================================
 # +++++ BOT HANDLERS: NAYA HYBRID SEARCH LOGIC +++++
 # =======================================================
+from aiogram.filters import StateFilter   # ⚠️ ensure import upar hai
+
 @dp.message(
-    F.text
-    & ~F.text.startswith("/")
-    & (F.chat.type == "private")
-    & ~F.state.in_(AdStates)   # 🔥 IMPORTANT FIX
+    StateFilter(None),            # 🔥 MAIN FIX
+    F.text,
+    ~F.text.startswith("/"),
+    F.chat.type == "private"
 )
 @handler_timeout(20)
 async def search_movie_handler(
