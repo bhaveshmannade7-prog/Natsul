@@ -1119,7 +1119,16 @@ async def banned_start_command_stub(message: types.Message):
 # UI Enhancement & CRITICAL BUG FIX (The logic that caused /stats to trigger /start for admin is removed)
 @dp.message(CommandStart())
 @handler_timeout(15)
-async def start_command(message: types.Message, bot: Bot, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
+async def start_command(
+    message: types.Message,
+    bot: Bot,
+    db_primary: Database,
+    db_fallback: Database,
+    db_neon: NeonDB,
+    redis_cache: RedisCacheLayer,
+    state: FSMContext
+):
+    await state.clear()  # 🔥 FSM RESET
     user = message.from_user
     if not user: return
     user_id = user.id
@@ -1429,13 +1438,19 @@ async def no_url_join_callback(callback: types.CallbackQuery):
 # =======================================================
 # +++++ BOT HANDLERS: NAYA HYBRID SEARCH LOGIC +++++
 # =======================================================
-@dp.message(F.text & ~F.text.startswith("/") & (F.chat.type == "private"), BannedFilter())
-async def banned_search_movie_handler_stub(message: types.Message): pass
-
-# FIXED: Added state filter to search handler so it doesn't trigger during /addad
-@dp.message(F.text & ~F.text.startswith("/") & (F.chat.type == "private"), F.state == None)
+@dp.message(F.text & ~F.text.startswith("/") & (F.chat.type == "private"))
 @handler_timeout(20)
-async def search_movie_handler(message: types.Message, bot: Bot, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
+async def search_movie_handler(
+    message: types.Message,
+    bot: Bot,
+    db_primary: Database,
+    db_fallback: Database,
+    db_neon: NeonDB,
+    redis_cache: RedisCacheLayer,
+    state: FSMContext
+):
+    # 🔥 FIX: FSM state clear (bahut zaroori)
+    await state.clear()
     user = message.from_user
     if not user: return
     user_id = user.id
