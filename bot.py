@@ -2141,6 +2141,8 @@ async def ad_btn_label_rcv(message: types.Message, state: FSMContext):
         data = await state.get_data()
         ad_id = await db_primary.add_ad(data['text'])
         await message.answer(f"✅ **Ad Saved!** ID: `{ad_id}`")
+
+        await state.clear()   # 🔥 YE LINE ADD KARO (VERY IMPORTANT)
         await state.clear()
         return
     await state.update_data(btn_text=message.text)
