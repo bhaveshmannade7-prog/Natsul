@@ -826,7 +826,7 @@ async def lifespan(app: FastAPI):
     global monitor_task, executor, watchdog
     logger.info("Application startup shuru ho raha hai...")
     
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
     loop = asyncio.get_running_loop(); loop.set_default_executor(executor)
     logger.info("ThreadPoolExecutor initialize ho gaya.")
 
