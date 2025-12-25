@@ -827,7 +827,57 @@ def python_fuzzy_search(query: str, limit: int = 10) -> List[Dict]:
     except Exception as e:
         logger.error(f"python_fuzzy_search mein error: {e}", exc_info=True)
         return []
+        
+# ================== SYNC TASKS ==================
 
+async def mongo_to_neon_sync(message, status_msg):
+    try:
+        await status_msg.edit_text("📦 MongoDB se data fetch ho raha hai...")
+
+        records = await safe_db_call(
+            db_primary.get_all_movies_for_fuzzy_cache(),
+            timeout=300,
+            default=[]
+        )
+
+        if not records:
+            await status_msg.edit_text("⚠️ MongoDB me koi record nahi mila.")
+            return
+
+        total = len(records)
+        await status_msg.edit_text(
+            f"📊 Total Records: {total}\n🚀 NeonDB sync start..."
+        )
+
+        BATCH_SIZE = 500
+        synced = 0
+
+        for i in range(0, total, BATCH_SIZE):
+            batch = records[i:i + BATCH_SIZE]
+
+            await safe_db_call(
+                db_neon.bulk_insert_movies(batch),
+                timeout=120
+            )
+
+            synced += len(batch)
+
+            await status_msg.edit_text(
+                f"⏳ Sync Progress\n"
+                f"{synced}/{total} records synced"
+            )
+
+        await status_msg.edit_text(
+            f"✅ **Mongo → Neon Sync COMPLETE**\n"
+            f"📦 Total Synced: {synced}"
+        )
+
+    except Exception as e:
+        logger.exception("Mongo → Neon Sync Failed")
+        await status_msg.edit_text(
+            f"❌ **Mongo → Neon Sync FAILED**\n"
+            f"Error: `{str(e)}`"
+        )
 # ============ LIFESPAN MANAGEMENT (FastAPI) (F.I.X.E.D.) ============
 @asynccontextmanager
 async def lifespan(app: FastAPI):
