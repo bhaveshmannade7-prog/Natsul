@@ -878,6 +878,45 @@ async def mongo_to_neon_sync(message, status_msg):
             f"❌ **Mongo → Neon Sync FAILED**\n"
             f"Error: `{str(e)}`"
         )
+        async def neon_to_mongo_sync(message, status_msg):
+    try:
+        await status_msg.edit_text("📥 NeonDB se data fetch ho raha hai...")
+
+        records = await safe_db_call(
+            db_neon.get_all_movies(),
+            timeout=300,
+            default=[]
+        )
+
+        if not records:
+            await status_msg.edit_text("⚠️ NeonDB me koi record nahi mila.")
+            return
+
+        total = len(records)
+        await status_msg.edit_text(f"📊 Total Records: {total}\n🚀 MongoDB restore start...")
+
+        BATCH_SIZE = 500
+        synced = 0
+
+        for i in range(0, total, BATCH_SIZE):
+            batch = records[i:i + BATCH_SIZE]
+
+            await safe_db_call(
+                db_primary.bulk_insert_movies(batch),
+                timeout=120
+            )
+
+            synced += len(batch)
+
+            await status_msg.edit_text(
+                f"⏳ Restore Progress\n{synced}/{total}"
+            )
+
+        await status_msg.edit_text("✅ **Neon → Mongo Restore COMPLETE**")
+
+    except Exception as e:
+        logger.exception("Neon → Mongo Restore Failed")
+        await status_msg.edit_text(f"❌ Restore FAILED\nError: `{str(e)}`")
 # ============ LIFESPAN MANAGEMENT (FastAPI) (F.I.X.E.D.) ============
 @asynccontextmanager
 async def lifespan(app: FastAPI):
