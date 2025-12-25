@@ -1316,7 +1316,17 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
 async def mongo_to_neon_command(message: types.Message):
     await run_in_background(mongo_to_neon_sync, message)
 
+@dp.message(Command("neon_to_mongo"))
+async def neon_to_mongo_command(message: types.Message):
+    await run_in_background(neon_to_mongo_sync, message)
 
+@dp.message(Command("mongo_backup"))
+async def mongo_backup_command(message: types.Message):
+    await run_in_background(mongo_backup_sync, message)
+
+@dp.message(Command("full_resync"))
+async def full_resync_command(message: types.Message):
+    await run_in_background(full_resync_sync, message)
 @dp.message(Command("help"), BannedFilter())
 @handler_timeout(10)
 async def help_command(message: types.Message, bot: Bot, db_primary: Database, redis_cache: RedisCacheLayer):
