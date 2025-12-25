@@ -133,7 +133,7 @@ try:
     PUBLIC_URL = os.getenv("PUBLIC_URL")
     WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 
-    DEFAULT_CONCURRENT_LIMIT = int(os.getenv("CONCURRENT_LIMIT", "35"))
+    DEFAULT_CONCURRENT_LIMIT = int(os.getenv("CONCURRENT_LIMIT", "80"))
     ACTIVE_WINDOW_MINUTES = int(os.getenv("ACTIVE_WINDOW_MINUTES", "5"))
     
     ALTERNATE_BOTS_RAW = os.getenv("ALTERNATE_BOTS", "")
