@@ -1273,6 +1273,9 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
         else:
             logger.error("User ne start kiya par koi JOIN_CHANNEL/GROUP set nahi hai.")
             await safe_tg_call(message.answer("⚠️ Configuration Error: Please contact Admin."), semaphore=TELEGRAM_COPY_SEMAPHORE)
+            @dp.message(Command("mongo_to_neon"))
+async def mongo_to_neon_command(message: types.Message):
+    await run_in_background(mongo_to_neon_sync, message)
 
 
 @dp.message(Command("help"), BannedFilter())
