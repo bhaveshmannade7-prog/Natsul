@@ -167,15 +167,25 @@ HANDLER_TIMEOUT = 15
 # DB_OP_TIMEOUT is imported from core_utils
 
 # ============ NEW: BACKGROUND TASK WRAPPER (FREEZE FIX) ============
-async def run_in_background(task_func, message: types.Message, *args, **kwargs):
-    """
-    Prevents Bot Freeze by running heavy sync logic as a background task.
-    MAIN SOLUTION FOR PROBLEM:Worker Freeze.
-    """
+async def run_in_background(task_func, message, *args, **kwargs):
     try:
-        msg = await message.answer("⚙️ **Background Task Started.**\nBot responsive rahega. Task progress monitor karein.")
-        # Logic to run heavy task without blocking current worker
-        asyncio.create_task(task_func(message, msg, *args, **kwargs))
+        status_msg = await message.answer(
+            "⚙️ **Background Task Started.**\nBot responsive rahega. Task progress monitor karein."
+        )
+
+        async def runner():
+            logger.info(f"[SYNC] Started: {task_func.__name__}")
+            try:
+                await task_func(message, status_msg, *args, **kwargs)
+                logger.info(f"[SYNC] Finished: {task_func.__name__}")
+            except Exception as e:
+                logger.exception("[SYNC] Failed")
+                await status_msg.edit_text(
+                    f"❌ **Sync FAILED**\nError: `{str(e)}`"
+                )
+
+        asyncio.create_task(runner())
+
     except Exception as e:
         logger.error(f"Background launch error: {e}")
 
