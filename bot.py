@@ -819,7 +819,46 @@ def python_fuzzy_search(query: str, limit: int = 10) -> List[Dict]:
     except Exception as e:
         logger.error(f"python_fuzzy_search mein error: {e}", exc_info=True)
         return []
+        
+# ================= SYNC TASKS =================
 
+async def mongo_to_neon_sync(message, status_msg):
+    try:
+        await status_msg.edit_text("📦 MongoDB se data fetch ho raha hai...")
+
+        records = await safe_db_call(
+            db_primary.get_all_movies_for_fuzzy_cache(),
+            timeout=300,
+            default=[]
+        )
+
+        if not records:
+            await status_msg.edit_text("⚠️ MongoDB me koi record nahi mila.")
+            return
+
+        total = len(records)
+        await status_msg.edit_text(f"📊 Total Records: {total}\n🚀 NeonDB sync start...")
+
+        BATCH_SIZE = 500
+        synced = 0
+
+        for i in range(0, total, BATCH_SIZE):
+            batch = records[i:i + BATCH_SIZE]
+
+            await safe_db_call(
+                db_neon.bulk_insert_movies(batch),
+                timeout=120
+            )
+
+            synced += len(batch)
+
+            await status_msg.edit_text(f"⏳ Sync Progress\n{synced}/{total}")
+
+        await status_msg.edit_text("✅ **Mongo → Neon Sync COMPLETE**")
+
+    except Exception as e:
+        logger.exception("Mongo → Neon Sync Failed")
+        await status_msg.edit_text(f"❌ Sync FAILED\nError: `{str(e)}`")
 # ============ LIFESPAN MANAGEMENT (FastAPI) (F.I.X.E.D.) ============
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1215,7 +1254,10 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
         else:
             logger.error("User ne start kiya par koi JOIN_CHANNEL/GROUP set nahi hai.")
             await safe_tg_call(message.answer("⚠️ Configuration Error: Please contact Admin."), semaphore=TELEGRAM_COPY_SEMAPHORE)
-
+            
+@dp.message(Command("mongo_to_neon"))
+async def mongo_to_neon_command(message: types.Message):
+    await run_in_background(mongo_to_neon_sync, message)
 
 @dp.message(Command("help"), BannedFilter())
 @handler_timeout(10)
