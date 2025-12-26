@@ -171,17 +171,48 @@ HANDLER_TIMEOUT = 15
 # DB_OP_TIMEOUT is imported from core_utils
 
 # ============ NEW: BACKGROUND TASK WRAPPER (FREEZE FIX) ============
-async def run_in_background(task_func, message, *args, **kwargs):
+async def run_in_background(task_func, message, *args):
     """
     BUG-2:
     Enqueue sync job instead of running directly.
     """
-    await SYNC_QUEUE.put((task_func, message))
+    await SYNC_QUEUE.put((task_func, message, args))
     await message.answer(
-        "⏳ Sync request queued.\nIt will be processed shortly."
+        "⚙️ **Background Task Started.**\n"
+        "Bot responsive rahega. Task progress monitor karein."
     )
     async def sync_worker():
     """
+    BUG-2:
+    Dedicated single sync worker.
+    """
+    global SYNC_IN_PROGRESS
+
+    logger.info("🔄 Sync worker started")
+
+    while True:
+        task_func, message, args = await SYNC_QUEUE.get()
+
+        if SYNC_IN_PROGRESS:
+            await message.answer("⚠️ Ek sync already chal raha hai. Please wait.")
+            SYNC_QUEUE.task_done()
+            continue
+
+        SYNC_IN_PROGRESS = True
+
+        try:
+            status_msg = await message.answer("🔄 Sync started...")
+            await task_func(message, status_msg, *args)
+            await status_msg.edit_text("✅ Sync completed successfully.")
+        except Exception as e:
+            logger.exception("❌ Sync worker crash")
+            try:
+                await message.answer(f"❌ Sync failed: {e}")
+            except Exception:
+                pass
+        finally:
+            SYNC_IN_PROGRESS = False
+            SYNC_QUEUE.task_done()
     BUG-2:
     Dedicated single sync worker.
     Processes sync jobs sequentially to avoid multi-worker freeze.
