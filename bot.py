@@ -14,6 +14,10 @@ from contextlib import asynccontextmanager
 from typing import List, Dict, Callable, Any
 from functools import wraps
 import concurrent.futures
+# ================= SYNC QUEUE (BUG-2) =================
+
+SYNC_QUEUE: asyncio.Queue = asyncio.Queue()
+SYNC_WORKER_STARTED = False
 
 # --- Load dotenv FIRST ---
 from dotenv import load_dotenv
@@ -169,14 +173,36 @@ HANDLER_TIMEOUT = 15
 # ============ NEW: BACKGROUND TASK WRAPPER (FREEZE FIX) ============
 async def run_in_background(task_func, message, *args, **kwargs):
     """
-    BUG-1 FIX:
-    Multi-worker (Gunicorn) safe placeholder.
-    Actual background execution will be handled
-    via Redis-based worker in BUG-2 / BUG-3.
+    BUG-2:
+    Enqueue sync job instead of running directly.
     """
+    await SYNC_QUEUE.put((task_func, message))
     await message.answer(
-        "⚠️ Sync request received.\nQueued for background processing."
+        "⏳ Sync request queued.\nIt will be processed shortly."
     )
+    async def sync_worker():
+    """
+    BUG-2:
+    Dedicated single sync worker.
+    Processes sync jobs sequentially to avoid multi-worker freeze.
+    """
+    logger.info("🔄 Sync worker started")
+
+    while True:
+        task_func, message = await SYNC_QUEUE.get()
+
+        try:
+            status_msg = await message.answer("🔄 Sync started...")
+            await task_func(message, status_msg)
+            await status_msg.edit_text("✅ Sync completed successfully.")
+        except Exception as e:
+            logger.exception("Sync worker crashed")
+            try:
+                await message.answer(f"❌ Sync failed: {e}")
+            except Exception:
+                pass
+        finally:
+            SYNC_QUEUE.task_done()
 # ============ NEW: SHORTLINK REDIRECT LOGIC ============
 async def get_shortened_link(long_url, db: Database):
     """Generates monetized link from Admin Settings."""
@@ -823,6 +849,10 @@ def python_fuzzy_search(query: str, limit: int = 10) -> List[Dict]:
 async def lifespan(app: FastAPI):
     global monitor_task, executor, watchdog
     logger.info("Application startup shuru ho raha hai...")
+    global SYNC_WORKER_STARTED
+if not SYNC_WORKER_STARTED:
+    asyncio.create_task(sync_worker())
+    SYNC_WORKER_STARTED = True
     
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
     loop = asyncio.get_running_loop(); loop.set_default_executor(executor)
