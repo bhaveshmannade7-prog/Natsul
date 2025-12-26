@@ -320,11 +320,12 @@ async def shutdown_procedure():
     try: await dp.storage.close()
     except Exception as e: logger.error(f"Dispatcher storage close karte waqt error: {e}")
         
-    if executor:
-        executor.shutdown(wait=True, cancel_futures=False)
+        if executor:
+        # FIX: wait=False kiya taaki long-running search tasks shutdown ko block na karein
+        executor.shutdown(wait=False, cancel_futures=False)
         logger.info("ThreadPoolExecutor shutdown ho gaya.")
-        
-    # --- NEW: Close Redis Connection ---
+
+            # --- NEW: Close Redis Connection ---
     await redis_cache.close()
     # --- END NEW ---
         
@@ -2188,19 +2189,17 @@ async def set_shortlink_cmd(message: types.Message, db_primary: Database):
 # PROBLEM FIX: SYNC COMMAND WRAPPERS
 # ==========================================
 
-@dp.message(Command("sync_mongo_1_to_2"), AdminFilter())
 async def sync_m12_freeze_fix(message: types.Message, db_primary: Database, db_fallback: Database):
     await run_in_background(sync_mongo_1_to_2_command, message, db_primary, db_fallback)
 
-@dp.message(Command("force_rebuild_m1"), AdminFilter())
-async def force_rebuild_freeze_fix(message: types.Message, db_primary: Database):
-    await run_in_background(force_rebuild_all_clean_titles, message, db_primary)
+# FIX: 'bot' argument add kiya kyunki main logic function ko iski zaroorat hai
+async def force_rebuild_freeze_fix(message: types.Message, bot: Bot, db_primary: Database):
+    # FIX: Correct function name 'force_rebuild_m1_command' use kiya (not the DB method directly)
+    await run_in_background(force_rebuild_m1_command, message, bot, db_primary)
 
-@dp.message(Command("sync_mongo_1_to_neon"), AdminFilter())
 async def sync_neon_freeze_fix(message: types.Message, db_primary: Database, db_neon: NeonDB):
     await run_in_background(sync_mongo_1_to_neon_command, message, db_primary, db_neon)
 
-@dp.message(Command("remove_library_duplicates"), AdminFilter())
 async def rem_dupes_freeze_fix(message: types.Message, db_neon: NeonDB):
     await run_in_background(remove_library_duplicates_command, message, db_neon)
 
