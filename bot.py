@@ -2716,14 +2716,7 @@ await asyncio.gather(*all_sync_tasks)
 ctx.progress = total_movies
 ctx.total = total_movies
 ctx.status = "completed"
-        # F.I.X: task ko safe_db_call से बनाएं
-        task = safe_db_call(db_fallback.add_movie(
-            imdb_id=movie.get('imdb_id'),
-            title=movie.get('title'),
-            year=None, 
-            file_id=movie.get('file_id'),
-            message_id=movie.get('message_id'),
-            channel_id=movie.get('channel_id'),
+
             # clean_text_for_search is a sync function, so it runs fine before the db call
             clean_title=clean_text_for_search(movie.get('title')),
             file_unique_id=movie.get('file_unique_id') or movie.get('file_id')
