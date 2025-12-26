@@ -761,10 +761,16 @@ def python_fuzzy_search(query: str, limit: int = 10) -> List[Dict]:
         # --- END 1 ---
 
 
-        # 2. RAPIDFUZZ BROAD FETCH (Limit 1000 - CPU-bound work)
-        all_titles = list(fuzzy_movie_cache.keys())
-        
+                # 2. RAPIDFUZZ BROAD FETCH (Limit 1000 - CPU-bound work)
+        # Fix: Create a local copy of keys to avoid RuntimeErrors during reload updates
+        try:
+            all_titles = list(fuzzy_movie_cache.keys())
+        except RuntimeError:
+            # Fallback agar dictionary size change ho jaye iteration ke dauran
+            all_titles = list(fuzzy_movie_cache.keys())
+
         # Process.extract ko WRatio se chalao
+
         pre_filtered = process.extract(
             q_fuzzy, 
             all_titles, 
@@ -835,9 +841,14 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop(); loop.set_default_executor(executor)
     logger.info("ThreadPoolExecutor initialize ho gaya.")
 
-    # --- NEW: Redis Init (Free-Tier Optimization) ---
-    await redis_cache.init_cache()
+        # --- NEW: Redis Init (Free-Tier Optimization) ---
+    try:
+        await redis_cache.init_cache()
+        logger.info("Redis Cache initialized successfully.")
+    except Exception as e:
+        logger.error(f"Redis Init Failed: {e}. Proceeding without Redis.")
     # --- END NEW ---
+
     
     # MongoDB 1 (Primary)
     db1_success = False
