@@ -21,7 +21,7 @@ load_dotenv()
 
 # --- NEW IMPORTS ---
 # FIXED: name 'TELEGRAM_DELETE_SEMAPHORE' instead of typo 'TELEGRAM_DELETE_SEMAP_RE'
-from core_utils import safe_tg_call, safe_db_call, DB_SEMAPHORE, TELEGRAM_DELETE_SEMAPHORE, TELEGRAM_COPY_SEMAPHORE, TELEGRAM_BROADCAST_SEMAP_RE, TELEGRAM_BROADCAST_SEMAPHORE, WEBHOOK_SEMAPHORE, TG_OP_TIMEOUT, DB_OP_TIMEOUT
+from core_utils import safe_tg_call, safe_db_call, DB_SEMAPHORE, TELEGRAM_DELETE_SEMAPHORE, TELEGRAM_COPY_SEMAPHORE, TELEGRAM_BROADCAST_SEMAPHORE, WEBHOOK_SEMAPHORE, TG_OP_TIMEOUT, DB_OP_TIMEOUT
 from redis_cache import redis_cache, RedisCacheLayer
 from queue_wrapper import priority_queue, PriorityQueueWrapper, QUEUE_CONCURRENCY, PRIORITY_ADMIN
 from smart_watchdog import SmartWatchdog, WATCHDOG_ENABLED 
