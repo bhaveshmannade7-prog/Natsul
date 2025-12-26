@@ -63,7 +63,18 @@ from fastapi import FastAPI, BackgroundTasks, Request, HTTPException
 # --- Database Imports ---
 from database import Database
 from neondb import NeonDB
+from dataclasses import dataclass
+from typing import Optional
 
+@dataclass
+class SyncContext:
+    sync_id: str
+    started_at: float
+    progress: int = 0
+    total: int = 0
+    status: str = "running"
+    error: Optional[str] = None
+    ACTIVE_SYNC: Optional[SyncContext] = None
 # ============ LOGGING SETUP ============
 logging.basicConfig(
     level=logging.INFO,
@@ -2642,7 +2653,7 @@ async def backup_channel_command(message: types.Message, db_neon: NeonDB):
 
 @dp.message(Command("sync_mongo_1_to_neon"), AdminFilter())
 @handler_timeout(1800)
-async def sync_mongo_1_to_neon_command(message: types.Message, status_msg: types.Message, db_primary: Database, db_neon: NeonDB):
+async def sync_mongo_1_to_neon(ctx: SyncContext, db_primary, db_neon):
     # This is called via run_in_background
     await safe_tg_call(status_msg.edit_text("🔄 **Syncing M1 → Neon**..."))
     
