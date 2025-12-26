@@ -910,6 +910,13 @@ if not SYNC_WORKER_STARTED:
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
     loop = asyncio.get_running_loop(); loop.set_default_executor(executor)
     logger.info("ThreadPoolExecutor initialize ho gaya.")
+    # ================= SYNC WORKER START (BUG-2) =================
+global SYNC_WORKER_STARTED
+if not SYNC_WORKER_STARTED:
+    asyncio.create_task(sync_worker())
+    SYNC_WORKER_STARTED = True
+    logger.info("✅ Dedicated SYNC worker started")
+# =============================================================
 
     # --- NEW: Redis Init (Free-Tier Optimization) ---
     await redis_cache.init_cache()
