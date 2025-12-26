@@ -18,7 +18,7 @@ import concurrent.futures
 
 SYNC_QUEUE: asyncio.Queue = asyncio.Queue()
 SYNC_WORKER_STARTED = False
-
+SYNC_IN_PROGRESS = False
 # --- Load dotenv FIRST ---
 from dotenv import load_dotenv
 load_dotenv()
@@ -189,7 +189,29 @@ async def run_in_background(task_func, message, *args, **kwargs):
     logger.info("🔄 Sync worker started")
 
     while True:
-        task_func, message = await SYNC_QUEUE.get()
+    task_func, message = await SYNC_QUEUE.get()
+    global SYNC_IN_PROGRESS
+
+    if SYNC_IN_PROGRESS:
+        await message.answer("⚠️ A sync is already running. Please wait.")
+        SYNC_QUEUE.task_done()
+        continue
+
+    SYNC_IN_PROGRESS = True
+
+    try:
+        status_msg = await message.answer("🔄 Sync started...")
+        await task_func(message, status_msg)
+        await status_msg.edit_text("✅ Sync completed successfully.")
+    except Exception as e:
+        logger.exception("Sync worker crashed")
+        try:
+            await message.answer(f"❌ Sync failed: {e}")
+        except Exception:
+            pass
+    finally:
+        SYNC_IN_PROGRESS = False
+        SYNC_QUEUE.task_done()
 
         try:
             status_msg = await message.answer("🔄 Sync started...")
