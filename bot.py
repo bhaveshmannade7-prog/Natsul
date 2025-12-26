@@ -173,11 +173,15 @@ async def run_in_background(task_func, message: types.Message, *args, **kwargs):
     MAIN SOLUTION FOR PROBLEM:Worker Freeze.
     """
     try:
-        msg = await message.answer("⚙️ **Background Task Started.**\nBot responsive rahega. Task progress monitor karein.")
-        # Logic to run heavy task without blocking current worker
-        asyncio.create_task(task_func(message, msg, *args, **kwargs))
+        # FIX: Hum yahan sirf acknowledge karenge. 
+        # Target function (admin cmd) khud apna status message bhejega.
+        await message.answer("🚀 **Task Scheduled in Background.**\nProcessing start ho rahi hai...")
+        
+        # FIX: 'msg' argument pass nahi kar rahe taaki TypeError na aaye
+        asyncio.create_task(task_func(message, *args, **kwargs))
     except Exception as e:
         logger.error(f"Background launch error: {e}")
+
 
 # ============ NEW: SHORTLINK REDIRECT LOGIC ============
 async def get_shortened_link(long_url, db: Database):
