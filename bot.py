@@ -2683,12 +2683,39 @@ async def sync_mongo_1_to_2_command(message: types.Message, status_msg: types.Me
     await safe_tg_call(status_msg.edit_text(f"✅ **Found**: {total_movies:,} movies.\n🔄 Syncing to M2..."))
     
     processed_count = 0
-    all_sync_tasks = [] 
-    BATCH_SIZE = 200 # Progress update ka interval
-    
-    for movie in mongo_movies_full:
-        processed_count += 1
-        
+all_sync_tasks = []
+BATCH_SIZE = 200  # progress update interval
+
+for movie in mongo_movies_full:
+    processed_count += 1
+
+    # 🔹 Progress update
+    ctx.progress = processed_count
+    ctx.total = total_movies
+
+    # 🔹 Safe DB task (per movie)
+    task = safe_db_call(
+        db_fallback.add_movie(
+            imdb_id=movie.get('imdb_id'),
+            title=movie.get('title'),
+            year=None,
+            file_id=movie.get('file_id'),
+            message_id=movie.get('message_id'),
+            channel_id=movie.get('channel_id'),
+        )
+    )
+
+    all_sync_tasks.append(task)
+
+# ================= LOOP END =================
+
+# 🔴 Execute all DB tasks together (IMPORTANT)
+await asyncio.gather(*all_sync_tasks)
+
+# 🔹 Final status update
+ctx.progress = total_movies
+ctx.total = total_movies
+ctx.status = "completed"
         # F.I.X: task ko safe_db_call से बनाएं
         task = safe_db_call(db_fallback.add_movie(
             imdb_id=movie.get('imdb_id'),
