@@ -177,7 +177,6 @@ async def run_in_background(task_func, message, *args, **kwargs):
         "⚠️ Sync request received.\nQueued for background processing."
     )
         # Logic to run heavy task without blocking current worker
-        asyncio.create_task(task_func(message, msg, *args, **kwargs))
     except Exception as e:
         logger.error(f"Background launch error: {e}")
 
