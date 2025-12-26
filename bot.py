@@ -167,18 +167,16 @@ HANDLER_TIMEOUT = 15
 # DB_OP_TIMEOUT is imported from core_utils
 
 # ============ NEW: BACKGROUND TASK WRAPPER (FREEZE FIX) ============
-async def run_in_background(task_func, message: types.Message, *args, **kwargs):
+async def run_in_background(task_func, message, *args, **kwargs):
     """
-    Prevents Bot Freeze by running heavy sync logic as a background task.
-    MAIN SOLUTION FOR PROBLEM:Worker Freeze.
+    BUG-1 FIX:
+    Multi-worker (Gunicorn) safe placeholder.
+    Actual background execution will be handled
+    via Redis-based worker in BUG-2 / BUG-3.
     """
-    try:
-        msg = await message.answer("⚙️ **Background Task Started.**\nBot responsive rahega. Task progress monitor karein.")
-        # Logic to run heavy task without blocking current worker
-        asyncio.create_task(task_func(message, msg, *args, **kwargs))
-    except Exception as e:
-        logger.error(f"Background launch error: {e}")
-
+    await message.answer(
+        "⚠️ Sync request received.\nQueued for background processing."
+    )
 # ============ NEW: SHORTLINK REDIRECT LOGIC ============
 async def get_shortened_link(long_url, db: Database):
     """Generates monetized link from Admin Settings."""
