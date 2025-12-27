@@ -2149,7 +2149,18 @@ async def search_switch_command(message: types.Message):
     # UI Enhancement: Improved deprecation message
     dep_text = "ℹ️ **DEPRECATED**\nThe bot now runs on the permanent **Hybrid Smart-Sequence Engine**. No switch needed."
     await safe_tg_call(message.answer(dep_text), semaphore=TELEGRAM_COPY_SEMAPHORE)
-
+    # --- NEW: Cancel Handler for FSM ---
+# Ye handler zaroori hai taaki agar Admin /addad command use karke 
+# beech mein ruk jaye, to /cancel daba kar bahar aa sake.
+@dp.message(Command("cancel"), StateFilter("*"))
+async def cancel_handler(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        await message.answer("ℹ️ **Nothing to cancel.** You are not in any active process.")
+        return
+    await state.clear()
+    await message.answer("🚫 **Process Cancelled.** You can now use normal commands.")
+    
 # ==========================================
 # FEATURE: ADS ADMIN HANDLERS
 # ==========================================
