@@ -122,7 +122,11 @@ try:
     REDIS_URL = os.getenv("REDIS_URL")
     
     # Using your Admin ID as default fallback
-    ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7263519581"))
+        # FIX: Default ID '0' kar diya taaki galti se koi stranger admin na bane
+    ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+    if ADMIN_USER_ID == 0:
+        logger.warning("⚠️ SECURITY WARNING: ADMIN_USER_ID set nahi hai! Admin commands kaam nahi karenge.")
+
     LIBRARY_CHANNEL_ID = int(os.getenv("LIBRARY_CHANNEL_ID", "0"))
 
     # FIX: Input ko yahan clean karke store karein
@@ -504,11 +508,12 @@ async def check_user_membership(user_id: int, current_bot: Bot) -> bool:
             if group_member in [False, None]: logger.warning(f"Membership check fail (Group {chat_identifier_group}).")
 
         return is_in_channel and is_in_group
-    except Exception as e:
-        # Predict future error: Bot admin nahi hai ya chat ID invalid hai
-        if not isinstance(e, (TelegramBadRequest, TelegramAPIError)): logger.error(f"Membership check mein error {user_id}: {e}", exc_info=True)
-        else: logger.info(f"Membership check API error {user_id}: {e}")
-        return False
+        except Exception as e:
+        # FIX: Fail-Open Logic. Agar API error/Timeout aaye, to user ko BLOCK MAT KARO.
+        # User ko allow kar do taaki traffic loss na ho.
+        logger.error(f"⚠️ Membership Check Failed (Server Error): {e}. Allowing user temporarily.")
+        return True 
+
 
 # UI Enhancement: Redesign get_join_keyboard
 def get_join_keyboard() -> InlineKeyboardMarkup | None:
@@ -666,10 +671,19 @@ async def load_fuzzy_cache(db: Database):
         logger.info("In-Memory Fuzzy Cache load ho raha hai (Redis > Mongo se)...")
         try:
             # get_all_movies_for_fuzzy_cache is an async method in database.py
+                        # get_all_movies_for_fuzzy_cache is an async method in database.py
             movies_list = await safe_db_call(db.get_all_movies_for_fuzzy_cache(), timeout=300, default=[])
+            
+            # FIX: RAM bachane ke liye Cache size limit karein (Max 15,000 titles)
+            # Sirf recent/popular movies hi RAM me rahengi, baaki DB search se milengi
+            if len(movies_list) > 15000:
+                logger.warning(f"⚠️ High Data Volume: Trimming cache from {len(movies_list)} to 15,000 titles to prevent crash.")
+                movies_list = movies_list[:15000]
+
             temp_cache = {}
             if movies_list:
                 for movie_dict in movies_list:
+
                     orig_clean = movie_dict.get('clean_title', '')
                     if orig_clean:
                          if orig_clean not in temp_cache:
