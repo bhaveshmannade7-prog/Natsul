@@ -2617,23 +2617,44 @@ async def backup_channel_command(message: types.Message, db_neon: NeonDB):
         copied_count, failed_count = 0, 0
         tasks = []
         
-        async def copy_file(msg_id: int, chat_id: int):
-            nonlocal copied_count, failed_count
-            res = await safe_tg_call(
-                bot.copy_message(chat_id=target, from_chat_id=chat_id, message_id=msg_id),
-                timeout=TG_OP_TIMEOUT * 2, semaphore=TELEGRAM_COPY_SEMAPHORE
-            )
-            if res: copied_count += 1
-            else: failed_count += 1
-            await asyncio.sleep(0.5) 
+                # (Naya Batching Logic Code)
+        # Helper to chunk list
+        def chunk_list(data, size):
+            for i in range(0, len(data), size):
+                yield data[i:i + size]
 
-        for i, (msg_id, chat_id) in enumerate(unique_files):
-            tasks.append(copy_file(msg_id, chat_id))
-            if (i + 1) % 50 == 0 or (i + 1) == total_files:
-                await asyncio.gather(*tasks); tasks = []
-                try: 
-                    await safe_tg_call(status_msg.edit_text(f"🚀 **Backup Progress**\nCompleted: {(i+1):,} / {total_files:,}\n✅ {copied_count} | ❌ {failed_count}"))
-                except TelegramBadRequest: pass
+        BATCH_SIZE = 20 # Ek baar me 20 files process karenge
+
+        for i, batch in enumerate(chunk_list(unique_files, BATCH_SIZE)):
+            batch_tasks = []
+            for msg_id, chat_id in batch:
+                # Task banayein par turant await na karein
+                task = safe_tg_call(
+                    bot.copy_message(chat_id=target, from_chat_id=chat_id, message_id=msg_id),
+                    timeout=TG_OP_TIMEOUT * 2, semaphore=TELEGRAM_COPY_SEMAPHORE
+                )
+                batch_tasks.append(task)
+            
+            # Batch ko execute karein
+            results = await asyncio.gather(*batch_tasks)
+            
+            # Results count karein
+            for res in results:
+                if res: copied_count += 1
+                else: failed_count += 1
+            
+            # Progress Update
+            total_processed = (i + 1) * BATCH_SIZE
+            if total_processed > total_files: total_processed = total_files
+            
+            # Har batch ke baad thoda rest (FloodWait Prevention)
+            await asyncio.sleep(2.0)
+
+            try: 
+                if i % 2 == 0: # Har 2nd batch pe edit karein (API bachane ke liye)
+                    await safe_tg_call(status_msg.edit_text(f"🚀 **Backup Progress**\nCompleted: {total_processed:,} / {total_files:,}\n✅ {copied_count} | ❌ {failed_count}"))
+            except TelegramBadRequest: pass
+
                 
         await safe_tg_call(status_msg.edit_text(f"🎉 **BACKUP FINISHED**\n\n**Total:** {total_files:,}\n**Success:** {copied_count}\n**Failed:** {failed_count}"))
 
