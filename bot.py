@@ -254,9 +254,11 @@ class BotManager:
                  self.bots[token] = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
                  logger.info(f"Alternate Bot instance for {token[:4]}... initialize ho gaya।")
 
-    def get_bot_by_token(self, token: str) -> Bot:
+        def get_bot_by_token(self, token: str) -> Bot | None:
         """Webhook se aaye token ke hisaab se bot instance return karein।"""
-        return self.bots.get(token, self.main_bot) 
+        # FIX: Agar token match nahi hota to None return karein (Security Fix)
+        return self.bots.get(token)
+
         
     def get_all_bots(self) -> List[Bot]:
         return list(self.bots.values())
@@ -744,13 +746,117 @@ def get_smart_match_score(query_tokens: List[str], target_clean: str) -> int:
     
     return score
 
-def python_fuzzy_search(query: str, limit: int = 10) -> List[Dict]:
+# FIX: 'all_titles_keys' argument add kiya thread safety ke liye
+def python_fuzzy_search(query: str, all_titles_keys: List[str], limit: int = 10) -> List[Dict]:
     """
     Smart V6 Search: Hybrid approach with Intent Engine V6 Re-Ranking.
-    - Low DB/CPU consumption guaranteed by using in-memory fuzzy_movie_cache.
+    - Thread-Safe version: Global cache iteration removed.
     """
-    if not fuzzy_movie_cache:
+    if not all_titles_keys:
         return []
+
+    try:
+        # 1. Clean inputs
+        q_fuzzy = clean_text_for_fuzzy(query) 
+        q_anchor = clean_text_for_search(query) 
+        
+        if not q_fuzzy or not q_anchor: return []
+        
+        # Tokenization (for Rule 1)
+        query_tokens = [t for t in q_anchor.split() if t]
+
+        candidates = []
+        seen_imdb = set()
+        
+        # --- 1. EXACT MATCH ANCHOR (Score 1001) ---
+        anchor_keys = [q_anchor]
+        if q_anchor.startswith('the '):
+             anchor_keys.append(q_anchor[4:]) 
+        else:
+             anchor_keys.append('the ' + q_anchor) 
+
+        # FIX: Global dictionary sirf lookup (O(1)) ke liye use karein, iteration ke liye nahi
+        for key in set(anchor_keys):
+            if key in fuzzy_movie_cache:
+                data = fuzzy_movie_cache[key]
+                if data['imdb_id'] not in seen_imdb:
+                     candidates.append({
+                        'imdb_id': data['imdb_id'],
+                        'title': data['title'],
+                        'year': data.get('year'),
+                        'score': 1001, # Highest Priority Score
+                        'match_type': 'exact_anchor'
+                     })
+                     seen_imdb.add(data['imdb_id'])
+                     logger.debug(f"🎯 Exact Anchor Match: {data['title']}")
+        # --- END 1 ---
+
+
+        # 2. RAPIDFUZZ BROAD FETCH (Limit 1000 - CPU-bound work)
+        # FIX: Hum passed list 'all_titles_keys' use karenge, global keys() nahi
+        
+        # Process.extract ko WRatio se chalao
+        pre_filtered = process.extract(
+            q_fuzzy, 
+            all_titles_keys, # <-- THREAD SAFE LIST
+            limit=1000,  # Max 1000 items
+            scorer=fuzz.WRatio, 
+            score_cutoff=30 # Minimum required similarity
+        )
+        
+        # 3. INTENT ENGINE V6 RE-RANKING
+        for clean_title_key, fuzz_score, _ in pre_filtered:
+            # Global dict access by key is thread-safe in Python (atomic)
+            data = fuzzy_movie_cache.get(clean_title_key)
+            if not data or data['imdb_id'] in seen_imdb: continue
+            
+            t_clean_key = clean_title_key 
+            
+            # Smart Score Calculation (V6 Logic)
+            intent_score = get_smart_match_score(query_tokens, t_clean_key)
+            
+            final_score = 0
+            match_type = "fuzzy"
+            
+            if fuzz_score >= 95:
+                # High Fuzzy (near perfect) ko 900+ score do
+                final_score = 900 + intent_score
+                match_type = "high_fuzzy"
+            elif intent_score > 50: 
+                # Intent matches (word presence/sequence) ko 500-750 score do
+                final_score = 500 + intent_score 
+                match_type = "intent"
+            else:
+                # Default WRatio score
+                final_score = fuzz_score
+
+            candidates.append({
+                'imdb_id': data['imdb_id'],
+                'title': data['title'],
+                'year': data.get('year'),
+                'score': final_score,
+                'match_type': match_type
+            })
+            seen_imdb.add(data['imdb_id'])
+
+
+        # 4. Final Sort & Deduplicate
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Final deduplication
+        unique_candidates = []
+        final_seen_imdb = set()
+        for c in candidates:
+            if c['imdb_id'] not in final_seen_imdb:
+                unique_candidates.append(c)
+                final_seen_imdb.add(c['imdb_id'])
+        
+        return unique_candidates[:limit]
+        
+    except Exception as e:
+        logger.error(f"python_fuzzy_search mein error: {e}", exc_info=True)
+        return []
+
 
     try:
         # 1. Clean inputs
