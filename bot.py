@@ -2478,9 +2478,14 @@ async def import_json_command(message: types.Message, db_primary: Database, db_f
     try:
         file = await bot.get_file(doc.file_id);
         if file.file_path is None: await safe_tg_call(msg.edit_text(f"❌ **Error**: Path missing.")); return
-        fio = io.BytesIO(); 
-        await bot.download_file(file.file_path, fio); fio.seek(0)
-        loop = asyncio.get_running_loop()
+                fio.seek(0, os.SEEK_END)
+        file_size = fio.tell()
+        fio.seek(0)
+        
+        # FIX: RAM Safety Limit (Max 30MB for Free Tier)
+        if file_size > 30 * 1024 * 1024:
+            await safe_tg_call(msg.edit_text("❌ **File Too Large**: Max limit is 30MB for JSON imports."))
+            return
         # JSON parsing is CPU bound, run in executor
         mlist = await loop.run_in_executor(executor, lambda: json.loads(fio.read().decode('utf-8')))
         assert isinstance(mlist, list)
