@@ -580,8 +580,10 @@ def clean_text_for_fuzzy(text: str) -> str:
 def extract_movie_info(caption: str | None) -> Dict[str, str] | None:
     if not caption: return None
     info = {}; lines = caption.splitlines(); title = lines[0].strip() if lines else ""
-    if len(lines) > 1 and re.search(r"^\s*[Ss](eason)?\s*\d{1,2}\b", lines[1]): 
+        # FIX: Regex ko case-insensitive aur flexible banaya
+    if len(lines) > 1 and re.search(r"^\s*(s|season)\s*\d{1,2}", lines[1], flags=re.IGNORECASE): 
         title += " " + lines[1].strip()
+
     if title: info["title"] = title
     imdb_match = re.search(r"(tt\d{7,})", caption);
     if imdb_match: info["imdb_id"] = imdb_match.group(1)
@@ -1605,8 +1607,10 @@ async def refresh_search_callback(callback: types.CallbackQuery, bot: Bot, redis
         if cached_count:
             current_count = int(cached_count)
             
-    if current_count >= 2:
-        await safe_tg_call(callback.answer("⚠️ Limit Reached: You can only refresh results 2 times per day.", show_alert=True))
+        # FIX: Limit badha kar 20 kar di hai taaki user browse kar sake
+    MAX_REFRESH_LIMIT = 20
+    if current_count >= MAX_REFRESH_LIMIT:
+        await safe_tg_call(callback.answer("⚠️ Daily Search Limit Reached. Please try again tomorrow.", show_alert=True))
         return
 
     # 2. Get Last Query
