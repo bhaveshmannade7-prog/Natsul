@@ -708,6 +708,7 @@ def overflow_message(active_users: int) -> str:
     )
 
 # --- NEW: SAFE AUTO DELETE HELPER ---
+# --- NEW: SAFE AUTO DELETE HELPER ---
 async def schedule_auto_delete(bot: Bot, chat_id: int, message_id: int, delay: int = 420):
     """
     Schedules message deletion securely.
@@ -729,14 +730,14 @@ async def schedule_auto_delete(bot: Bot, chat_id: int, message_id: int, delay: i
     # Task create karke global set mein daalo
     task = asyncio.create_task(_delete_task_wrapper())
     
-    # Check if global set exists (Step 1 agar miss hua ho to crash na ho)
+    # Check if global set exists
     if 'background_tasks' in globals():
         background_tasks.add(task)
-        # Jab task khatam ho jaye, to set se nikaal do (Memory cleanup)
+        # Jab task khatam ho jaye, to set se nikaal do
         task.add_done_callback(background_tasks.discard)
     else:
-        # Fallback agar global variable add nahi kiya
         logger.warning("Global 'background_tasks' set not found. Memory safety disabled.")
+
 
 
 # ============ EVENT LOOP MONITOR (Unchanged) ============
