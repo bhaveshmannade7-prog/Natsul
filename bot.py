@@ -707,18 +707,37 @@ def overflow_message(active_users: int) -> str:
         f"✨ *Thank you for your patience.*"
     )
 
-# --- NEW: AUTO DELETE HELPER ---
+# --- NEW: SAFE AUTO DELETE HELPER ---
 async def schedule_auto_delete(bot: Bot, chat_id: int, message_id: int, delay: int = 420):
-    """Schedules message deletion after delay seconds (default 7 mins)."""
-    await asyncio.sleep(delay)
-    try:
-        await safe_tg_call(
-            bot.delete_message(chat_id=chat_id, message_id=message_id),
-            semaphore=TELEGRAM_DELETE_SEMAPHORE
-        )
-    except Exception as e:
-        logger.warning(f"Auto-delete failed for {chat_id}/{message_id}: {e}")
-# --- END NEW ---
+    """
+    Schedules message deletion securely.
+    Uses strict reference holding to prevent garbage collection.
+    """
+    async def _delete_task_wrapper():
+        # Delay logic
+        await asyncio.sleep(delay)
+        try:
+            # Safe delete call
+            await safe_tg_call(
+                bot.delete_message(chat_id=chat_id, message_id=message_id),
+                semaphore=TELEGRAM_DELETE_SEMAPHORE
+            )
+        except Exception as e:
+            # Sirf warning log karein, crash nahi
+            logger.warning(f"Auto-delete failed for {chat_id}/{message_id}: {e}")
+
+    # Task create karke global set mein daalo
+    task = asyncio.create_task(_delete_task_wrapper())
+    
+    # Check if global set exists (Step 1 agar miss hua ho to crash na ho)
+    if 'background_tasks' in globals():
+        background_tasks.add(task)
+        # Jab task khatam ho jaye, to set se nikaal do (Memory cleanup)
+        task.add_done_callback(background_tasks.discard)
+    else:
+        # Fallback agar global variable add nahi kiya
+        logger.warning("Global 'background_tasks' set not found. Memory safety disabled.")
+
 
 # ============ EVENT LOOP MONITOR (Unchanged) ============
 async def monitor_event_loop():
