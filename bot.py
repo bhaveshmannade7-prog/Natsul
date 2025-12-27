@@ -526,68 +526,8 @@ async def check_user_membership(user_id: int, current_bot: Bot) -> bool:
         
         # Agar koi unknown error hai to bhi allow karo taaki bot dead na lage
         return True
-
-    
-    # FIX: Chat ID ko pehle check karein (Input Robustness)
-    chat_identifier_channel = JOIN_CHANNEL_USERNAME
-    chat_identifier_group = USER_GROUP_USERNAME
-    
-    # Logic to handle potential numeric chat IDs (e.g., -1001234567890)
-    def normalize_chat_id(identifier):
-        if not identifier: return None
-        # Step 1: Remove URL prefixes and @ sign
-        identifier = re.sub(r'https?://t\.me/', '', identifier, flags=re.IGNORECASE)
-        identifier = identifier.lstrip('@')
-        
-        # Step 2: Check if numeric/negative numeric
-        if identifier and (identifier.startswith('-') and identifier[1:].isdigit() or identifier.isdigit()):
-            # Numeric IDs ko asali API call ke liye int mein convert karein
-            return int(identifier)
-        
-        # Step 3: If not numeric, use as @username (API call ke liye @ sign zaroori hai)
-        return f"@{identifier}" if identifier else None
-        
-    chat_id_channel = normalize_chat_id(chat_identifier_channel)
-    chat_id_group = normalize_chat_id(chat_identifier_group)
-    
-    
-    try:
-        tasks_to_run = []
-        if chat_id_channel:
-            tasks_to_run.append(safe_tg_call(current_bot.get_chat_member(chat_id=chat_id_channel, user_id=user_id), timeout=5))
-        if chat_id_group:
-            tasks_to_run.append(safe_tg_call(current_bot.get_chat_member(chat_id=chat_id_group, user_id=user_id), timeout=5))
             
-        results = await asyncio.gather(*tasks_to_run)
-        valid_statuses = {"member", "administrator", "creator"}
-        is_in_channel = True; is_in_group = True; result_index = 0
-        
-        if chat_id_channel:
-            channel_member = results[result_index]
-            is_in_channel = isinstance(channel_member, types.ChatMember) and channel_member.status in valid_statuses
-            # Agar TelegramAPIError ya Chat not found aata hai, to channel_member False ho jata hai
-            if channel_member in [False, None]: logger.warning(f"Membership check fail (Channel {chat_identifier_channel}).")
-            result_index += 1
             
-        if chat_id_group:
-            group_member = results[result_index]
-            is_in_group = isinstance(group_member, types.ChatMember) and group_member.status in valid_statuses
-            if group_member in [False, None]: logger.warning(f"Membership check fail (Group {chat_identifier_group}).")
-
-        return is_in_channel and is_in_group
-        except Exception as e:
-        # FIX: Fail-Safe Logic implemented.
-        # Agar Telegram API down hai ya Timeout hai, to user ko allow karo (True return karo).
-        # Hum genuine users ko server error ki wajah se nahi rokenge.
-        logger.error(f"⚠️ Membership Check Error for {user_id}: {e}")
-        if isinstance(e, (TelegramRetryAfter, asyncio.TimeoutError)):
-             logger.warning("Server Busy/Timeout: Allowing user temporarily.")
-             return True # Allow access during heavy load
-        
-        # Agar koi unknown error hai to bhi allow karo taaki bot dead na lage
-        return True 
-
-
 # UI Enhancement: Redesign get_join_keyboard
 def get_join_keyboard() -> InlineKeyboardMarkup | None:
     buttons = []
