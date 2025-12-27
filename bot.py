@@ -796,12 +796,13 @@ def python_fuzzy_search(query: str, limit: int = 10) -> List[Dict]:
         all_titles = list(fuzzy_movie_cache.keys())
         
         # Process.extract ko WRatio se chalao
+                # FIX: CPU Optimization - Reduce limit & increase cutoff
         pre_filtered = process.extract(
             q_fuzzy, 
             all_titles, 
-            limit=1000,  # Max 1000 items
+            limit=200,  # Reduced from 1000 to 200
             scorer=fuzz.WRatio, 
-            score_cutoff=30 # Minimum required similarity
+            score_cutoff=55 # Ignore low quality matches early
         )
         
         # 3. INTENT ENGINE V6 RE-RANKING
