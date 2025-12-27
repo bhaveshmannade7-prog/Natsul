@@ -1166,15 +1166,23 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
             asyncio.create_task(db_primary.track_event("shortlink_success"))
             # Normal delivery logic from token info
             imdb_id = token_doc["imdb_id"]
+                        # YE NAYA CODE PASTE KAREIN
             movie = await safe_db_call(db_primary.get_movie_by_imdb(imdb_id))
-            if movie:
+            
+            # FIX: Check karein ki movie exist karti hai AUR usme channel_id + message_id hai
+            if movie and movie.get("channel_id") and movie.get("message_id"):
                  # Execute copy
                  res = await safe_tg_call(bot.copy_message(user_id, int(movie["channel_id"]), movie["message_id"]), semaphore=TELEGRAM_COPY_SEMAPHORE)
                  if res:
                       asyncio.create_task(schedule_auto_delete(bot, user_id, res.message_id))
                       # Trigger Post-Download Ad (Isolated Task)
                       asyncio.create_task(send_sponsor_ad(user_id, bot, db_primary, redis_cache))
-            return
+            
+            # Agar movie DB me nahi mili ya data adhoora hai
+            elif movie:
+                 await message.answer("⚠️ **Content Unavailable**: This file seems to be corrupted or deleted from the database.")
+                 return
+
         else:
             await message.answer("❌ **Verification Failed!**\nToken is invalid or expired. Please search again and use the new link.")
             return
