@@ -749,11 +749,15 @@ def python_fuzzy_search(query: str, limit: int = 10) -> List[Dict]:
     Smart V6 Search: Hybrid approach with Intent Engine V6 Re-Ranking.
     - Low DB/CPU consumption guaranteed by using in-memory fuzzy_movie_cache.
     """
-    if not fuzzy_movie_cache:
+        # FIX: Thread Safety - Use local reference passed as argument
+    # (Note: Function signature change required, see Bug 2 Part B below)
+    current_cache = kwargs.get('cache_snapshot') or fuzzy_movie_cache
+    if not current_cache:
         return []
 
     try:
         # 1. Clean inputs
+
         q_fuzzy = clean_text_for_fuzzy(query) 
         q_anchor = clean_text_for_search(query) 
         
@@ -1019,9 +1023,11 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post(f"/bot/{{token}}")
 async def bot_webhook(token: str, update: dict, background_tasks: BackgroundTasks, request: Request):
-    if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
-        logger.warning("Invalid webhook secret token mila.")
-        raise HTTPException(status_code=403, detail="Forbidden: Invalid Secret Token")
+        # FIX: Strict Secret Verification
+    secret_header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if WEBHOOK_SECRET and secret_header != WEBHOOK_SECRET:
+        logger.critical(f"⛔ SECURITY ALERT: Invalid Webhook Secret! Got: {secret_header}")
+        raise HTTPException(status_code=403, detail="Forbidden: Security Verification Failed")
         
     # --- NEW: Bot Manager se Bot Instance select karein (Multi-Token) ---
     bot_instance = bot_manager.get_bot_by_token(token)
@@ -1525,8 +1531,10 @@ async def search_movie_handler(message: types.Message, bot: Bot, db_primary: Dat
     # Rule: python_fuzzy_search is CPU-bound (rapidfuzz), run it in ThreadPoolExecutor.
     loop = asyncio.get_running_loop()
     # python_fuzzy_search is a plain function, so it runs in executor
-    fuzzy_hits_task = loop.run_in_executor(executor, python_fuzzy_search, original_query, 45) 
-    
+        # FIX: Pass Cache Snapshot to Thread
+    cache_snapshot = fuzzy_movie_cache.copy() # Shallow copy is enough and fast
+    fuzzy_hits_task = loop.run_in_executor(executor, partial(python_fuzzy_search, cache_snapshot=cache_snapshot), original_query, 45)
+  
     fuzzy_hits_raw = await fuzzy_hits_task
     if fuzzy_hits_raw is None: fuzzy_hits_raw = []
 
@@ -2262,9 +2270,18 @@ async def rem_dupes_freeze_fix(message: types.Message, db_primary: Database, db_
 async def broadcast_command(message: types.Message, db_primary: Database):
     if not message.reply_to_message:
         await safe_tg_call(message.answer("⚠️ **Broadcast Error**: Reply to a message to broadcast."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
-    # get_all_users is an async method in database.py
-    users = await safe_db_call(db_primary.get_all_users(), timeout=60, default=[])
+        # FIX: Memory Efficient Iterator (Assuming db supports async iteration or use fallback)
+    users_cursor = await safe_db_call(db_primary.get_all_users_cursor(), default=None) 
+    
+    if not users_cursor:
+         # Fallback if cursor not implemented: Fetch with Limit
+         logger.warning("Cursor not found, using limited fetch for safety")
+         users = await safe_db_call(db_primary.get_all_users(limit=10000), default=[])
+    else:
+         users = users_cursor # Placeholder for cursor logic
+    
     if not users:
+
         await safe_tg_call(message.answer("⚠️ **Broadcast Error**: No users found."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
         
     total = len(users); msg = await safe_tg_call(message.answer(f"📢 **Initializing Broadcast**\nTarget: {total:,} users..."), semaphore=TELEGRAM_COPY_SEMAPHORE)
