@@ -65,6 +65,9 @@ from database import Database
 from neondb import NeonDB
 
 # ============ LOGGING SETUP ============
+# --- GLOBAL VARIABLES ---
+# Ye set background tasks ko hold karega taaki wo beech mein kill na hon
+background_tasks = set()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)-8s - %(name)-15s - %(message)s",
@@ -122,7 +125,16 @@ try:
     REDIS_URL = os.getenv("REDIS_URL")
     
     # Using your Admin ID as default fallback
-    ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "7263519581"))
+        # FIX: Hardcoded ID hataya. Agar ENV nahi mila to 0 (No Admin) set hoga.
+    # Ye hack hone se bachayega.
+    try:
+        ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+    except ValueError:
+        ADMIN_USER_ID = 0 # Agar galti se text likh diya to bhi crash nahi hoga
+    
+    if ADMIN_USER_ID == 0:
+        logger.critical("⚠️ SECURITY ALERT: ADMIN_USER_ID set nahi hai! Admin commands disabled hain.")
+
     LIBRARY_CHANNEL_ID = int(os.getenv("LIBRARY_CHANNEL_ID", "0"))
 
     # FIX: Input ko yahan clean karke store karein
@@ -504,11 +516,18 @@ async def check_user_membership(user_id: int, current_bot: Bot) -> bool:
             if group_member in [False, None]: logger.warning(f"Membership check fail (Group {chat_identifier_group}).")
 
         return is_in_channel and is_in_group
-    except Exception as e:
-        # Predict future error: Bot admin nahi hai ya chat ID invalid hai
-        if not isinstance(e, (TelegramBadRequest, TelegramAPIError)): logger.error(f"Membership check mein error {user_id}: {e}", exc_info=True)
-        else: logger.info(f"Membership check API error {user_id}: {e}")
-        return False
+        except Exception as e:
+        # FIX: Fail-Safe Logic implemented.
+        # Agar Telegram API down hai ya Timeout hai, to user ko allow karo (True return karo).
+        # Hum genuine users ko server error ki wajah se nahi rokenge.
+        logger.error(f"⚠️ Membership Check Error for {user_id}: {e}")
+        if isinstance(e, (TelegramRetryAfter, asyncio.TimeoutError)):
+             logger.warning("Server Busy/Timeout: Allowing user temporarily.")
+             return True # Allow access during heavy load
+        
+        # Agar koi unknown error hai to bhi allow karo taaki bot dead na lage
+        return True 
+
 
 # UI Enhancement: Redesign get_join_keyboard
 def get_join_keyboard() -> InlineKeyboardMarkup | None:
