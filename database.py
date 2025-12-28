@@ -187,11 +187,11 @@ class Database:
             
             logger.info("Database indexes created/verified।")
             return True # F.I.X: Success hone par True return karein
-        except Exception as e:
-            logger.error(f"Error during index creation: {e}", exc_info=True)
-            # F.I.X: Index creation fail ho to False return karein (lekin connection success tha)
-            # Connection banne ke baad index fail ho to bhi hum chal sakte hain, isliye True rakhte hain
+                except Exception as e:
+            logger.critical(f"❌ CRITICAL: Database Index Creation Failed: {e}", exc_info=True)
+            # Return True to allow bot start (degraded mode), but logged as CRITICAL
             return True 
+
 
     # ==========================================
     # NEW FEATURE A: ADS MANAGEMENT
@@ -879,28 +879,34 @@ class Database:
             return []
         
         try:
-            # --- ORIGINAL MongoDB Aggregation Logic ---
-            pipeline = [
-                # Pehle IMDB ID se group karein, sabse naya title chunein
-                {"$sort": {"imdb_id": 1, "added_date": -1}},
-                {"$group": {
-                    "_id": "$imdb_id",
-                    "doc": {"$first": "$$ROOT"}
-                }},
-                {"$replaceRoot": {"newRoot": "$doc"}},
-                # Sirf zaroori data project karein
-                {"$project": {
-                    "_id": 0,
-                    "imdb_id": 1,
-                    "title": 1,
-                    "year": 1,
-                    "clean_title": 1
-                }}
-            ]
+                        # FIX: Memory Optimized Fetch (No Aggregation)
+            # Hum sirf raw data layenge aur Python mein dedup karenge (Faster for Free Tier)
+            cursor = self.movies.find(
+                {}, 
+                {"imdb_id": 1, "title": 1, "year": 1, "clean_title": 1, "_id": 0}
+            )
             
-            movies = []
-            # Agar data bahut bada hai toh to_list() se crash ho sakta hai, isliye async for use karein
-            async for m in self.movies.aggregate(pipeline):
+            raw_movies = []
+            async for m in cursor:
+                 raw_movies.append(m)
+
+            # Python Deduplication (Last one stays logic not guaranteed here but safer for RAM)
+            # Agar exact 'latest' chahiye to client side sort karein, par fuzzy cache ke liye zaroori nahi
+            movies_dict = {}
+            for m in raw_movies:
+                if not m.get('clean_title'):
+                    m['clean_title'] = clean_text_for_search(m.get('title', ''))
+                
+                # Dictionary key override handles duplicates automatically
+                movies_dict[m['imdb_id']] = {
+                    'imdb_id': m["imdb_id"],
+                    'title': m.get("title", "N/A"),
+                    'year': m.get("year"),
+                    'clean_title': m.get("clean_title")
+                }
+            
+            movies = list(movies_dict.values())
+            # Loop hataya kyunki humne upar hi dictionary bana li hai
                 if not m.get('clean_title'):
                     # Search Bug Fix: Agar clean_title missing hai, to runtime mein generate karein.
                     m['clean_title'] = clean_text_for_search(m.get('title', ''))
@@ -1039,6 +1045,17 @@ class Database:
             final_total = await self.movies.count_documents({}) if self.movies else 0
             return (updated_count, final_total)
 
+    async def close(self):
+        """Closes the MongoDB connection."""
+        if self.client:
+            try:
+                self.client.close()
+                logger.info("MongoDB connection closed.")
+            except Exception as e:
+                logger.error(f"Error closing MongoDB connection: {e}")
+            finally:
+                self.client = None
+                self.db = None
     # --- FINAL FIX: MongoDB Index Rebuild ---
     async def force_rebuild_text_index(self):
         """Zabaradasti MongoDB Text Index ko drop k करके rebuild karta hai।"""
