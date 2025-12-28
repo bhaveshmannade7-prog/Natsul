@@ -795,14 +795,14 @@ def python_fuzzy_search(query: str, limit: int = 10, **kwargs) -> List[Dict]:
         # 2. RAPIDFUZZ BROAD FETCH (Limit 1000 - CPU-bound work)
         all_titles = list(fuzzy_movie_cache.keys())
         
-        # Process.extract ko WRatio se chalao
-                # FIX: CPU Optimization - Reduce limit & increase cutoff
+                # Process.extract ko WRatio se chalao
+        # FIX: Optimized Balance (Accuracy vs CPU) for AWS EC2
         pre_filtered = process.extract(
             q_fuzzy, 
             all_titles, 
-            limit=200,  # Reduced from 1000 to 200
+            limit=800,  # Wapas badhaya (Accuracy ke liye)
             scorer=fuzz.WRatio, 
-            score_cutoff=55 # Ignore low quality matches early
+            score_cutoff=40 # Thoda loose kiya taaki 'Kantra' jaisi typos pakad sake
         )
         
         # 3. INTENT ENGINE V6 RE-RANKING
