@@ -2428,18 +2428,20 @@ async def broadcast_command(message: types.Message, db_primary: Database):
         # FIX: Memory Efficient Iterator (Assuming db supports async iteration or use fallback)
     users_cursor = await safe_db_call(db_primary.get_all_users_cursor(), default=None) 
     
-    if not users_cursor:
-         # Fallback if cursor not implemented: Fetch with Limit
-         logger.warning("Cursor not found, using limited fetch for safety")
-         users = await safe_db_call(db_primary.get_all_users(limit=10000), default=[])
+    # FIX: Cursor ko List me convert karna zaroori hai
+    if users_cursor and hasattr(users_cursor, 'to_list'):
+         # Motor cursor ko list me badlo
+         users = await users_cursor.to_list(length=None)
+    elif not users_cursor:
+         users = await safe_db_call(db_primary.get_all_users(limit=None), default=[])
     else:
-         users = users_cursor # Placeholder for cursor logic
+         users = list(users_cursor) if users_cursor else []
     
     if not users:
-
         await safe_tg_call(message.answer("⚠️ **Broadcast Error**: No users found."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
         
-    total = len(users); msg = await safe_tg_call(message.answer(f"📢 **Initializing Broadcast**\nTarget: {total:,} users..."), semaphore=TELEGRAM_COPY_SEMAPHORE)
+    total = len(users)
+    msg = await safe_tg_call(message.answer(f"📢 **Initializing Broadcast**\nTarget: {total:,} users..."), semaphore=TELEGRAM_COPY_SEMAPHORE)
     if not msg: return
     
     start_broadcast_time = datetime.now(timezone.utc)
@@ -2817,9 +2819,11 @@ async def backup_channel_command(message: types.Message, db_neon: NeonDB):
         await safe_tg_call(message.answer("⚠️ **Usage**: /backup_channel `ID_OR_USERNAME`"), semaphore=TELEGRAM_COPY_SEMAPHORE); return
     target_channel = args[1].strip()
     
-    # Wrapper function for background execution
-    async def backup_task(msg: types.Message, status_msg: types.Message, target: str, neon: NeonDB):
+        # Wrapper function for background execution
+    # FIX: **kwargs add kiya taki db_primary argument milne par crash na ho
+    async def backup_task(msg: types.Message, status_msg: types.Message, target: str, neon: NeonDB, **kwargs):
         unique_files = await safe_db_call(neon.get_unique_movies_for_backup(), default=[])
+
         if not unique_files:
             await safe_tg_call(status_msg.edit_text("❌ **Failed**: No files found.")); return
             
