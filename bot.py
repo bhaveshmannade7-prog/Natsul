@@ -578,12 +578,8 @@ def clean_text_for_search(text: str) -> str:
     return text
 
 def clean_text_for_fuzzy(text: str) -> str:
-    """Fuzzy ke liye spaces rakhna better hai"""
-    if not text: return ""
-    text = text.lower()
-    text = re.sub(r"\b(s|season)\s*\d{1,2}\b", "", text)
-    text = re.sub(r"[^a-z0-9\s]+", " ", text)
-    return text.strip()
+    # FIX: Unified cleaning logic using the main search cleaner (Bug #17)
+    return clean_text_for_search(text)
 
 def extract_movie_info(caption: str | None) -> Dict[str, str] | None:
     if not caption: return None
