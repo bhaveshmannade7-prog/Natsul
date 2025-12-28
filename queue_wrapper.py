@@ -27,24 +27,25 @@ class PriorityQueueWrapper:
     priority tasks (Admin, essential DB updates) are processed first.
     """
     def __init__(self, concurrency_limit: int):
-        self._queue = asyncio.PriorityQueue()
+        # FIX: Added maxsize to prevent OOM on free tier
+        self._queue = asyncio.PriorityQueue(maxsize=5000)
         self._concurrency_limit = concurrency_limit
         self._active_workers = 0
         self._workers: List[asyncio.Task] = []
         
     def start_workers(self, bot_instance: Bot, dp_instance: Any, db_objects: Dict[str, Any]):
-        """Queue processing workers ko shuru karta hai।"""
+        """Queue processing workers ko shuru karta haiред"""
         if self._workers:
-            logger.warning("Workers pehle se chal rahe hain।")
+            logger.warning("Workers pehle se chal rahe hainред")
             return
             
-        logger.info(f"Starting {self._concurrency_limit} priority queue workers।")
+        logger.info(f"Starting {self._concurrency_limit} priority queue workersред")
         for i in range(self._concurrency_limit):
             worker = asyncio.create_task(self._worker_loop(bot_instance, dp_instance, db_objects), name=f"QueueWorker-{i}")
             self._workers.append(worker)
 
     async def stop_workers(self):
-        """Gracefully workers ko band karta hai।"""
+        """Gracefully workers ko band karta haiред"""
         for worker in self._workers:
             worker.cancel()
         results = await asyncio.gather(*self._workers, return_exceptions=True)
@@ -52,11 +53,11 @@ class PriorityQueueWrapper:
             if isinstance(res, Exception) and not isinstance(res, asyncio.CancelledError):
                 logger.error(f"Worker shutdown error: {res}")
         self._workers.clear()
-        logger.info("Priority queue workers band ho gaye।")
+        logger.info("Priority queue workers band ho gayeред")
         
     def submit(self, update: types.Update, bot: Bot, db_objects: Dict[str, Any]):
         """
-        Update ko queue mein submit karta hai।
+        Update ko queue mein submit karta haiред
         """
         priority = PRIORITY_USER_ACTION
         
@@ -72,11 +73,14 @@ class PriorityQueueWrapper:
         
         # PriorityQueue mein tuple (priority, timestamp, update, bot, db_objects) jayega
         # Timestamp tie-breaker ka kaam karega (pehle aao, pehle pao agar priority same ho)
-        self._queue.put_nowait((priority, datetime.now(timezone.utc), update, bot, db_objects))
-        logger.debug(f"Update {update.update_id} submitted with priority {priority} (Queue size: {self._queue.qsize()})")
+        try:
+            self._queue.put_nowait((priority, datetime.now(timezone.utc), update, bot, db_objects))
+            logger.debug(f"Update {update.update_id} submitted with priority {priority} (Queue size: {self._queue.qsize()})")
+        except asyncio.QueueFull:
+            logger.warning(f"⚠️ Queue FULL! Update {update.update_id} dropped to preserve RAM.")
 
     async def _worker_loop(self, bot_instance: Bot, dp_instance: Any, db_objects: Dict[str, Any]):
-        """Worker jo queue se tasks pick karta hai।"""
+        """Worker jo queue se tasks pick karta haiред"""
         while True:
             # Yeh worker loop non-blocking hai, isliye free-tier rule 3 break nahi hoga.
             try:
