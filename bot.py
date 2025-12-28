@@ -2458,9 +2458,14 @@ async def broadcast_command(message: types.Message, db_primary: Database):
             await safe_db_call(db_primary.deactivate_user(user_id))
         else: failed_count += 1
 
-    last_update_time = start_broadcast_time
-    for i, user_id in enumerate(users):
-        tasks.append(send_to_user(user_id))
+        last_update_time = start_broadcast_time
+    for i, user_data in enumerate(users):
+        # FIX: Database se pura object aata hai, usme se ID nikalo
+        target_id = user_data if isinstance(user_data, int) else user_data.get('user_id')
+        
+        if not target_id: continue # Agar ID nahi mili to skip
+
+        tasks.append(send_to_user(target_id))
         processed_count = i + 1
         now = datetime.now(timezone.utc)
         if processed_count % 100 == 0 or (now - last_update_time).total_seconds() > 15 or processed_count == total:
@@ -2816,9 +2821,15 @@ async def backup_channel_command(message: types.Message, db_neon: NeonDB):
     # UI logic for identifying target
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await safe_tg_call(message.answer("⚠️ **Usage**: /backup_channel `ID_OR_USERNAME`"), semaphore=TELEGRAM_COPY_SEMAPHORE); return
-    target_channel = args[1].strip()
+        await safe_tg_call(message.answer("⚠️ **Usage**: /backup_channel `Target_Channel_ID`\nExample: `/backup_channel -1001234567890`"), semaphore=TELEGRAM_COPY_SEMAPHORE); return
     
+    target_channel = args[1].strip()
+
+    # FIX: Valid ID Check
+    # Agar user ne galti se "ID" likh diya ya ID valid nahi hai
+    if target_channel.upper() == "ID" or (not target_channel.startswith("@") and not target_channel.lstrip("-").isdigit()):
+        await safe_tg_call(message.answer("❌ **Invalid Channel ID!**\nKripya sahi Channel ID (e.g., `-100...`) ya Username (`@name`) dalein."), semaphore=TELEGRAM_COPY_SEMAPHORE)
+        return
         # Wrapper function for background execution
     # FIX: **kwargs add kiya taki db_primary argument milne par crash na ho
     async def backup_task(msg: types.Message, status_msg: types.Message, target: str, neon: NeonDB, **kwargs):
