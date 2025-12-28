@@ -1211,7 +1211,7 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
             return
     # --- END MONETIZATION CATCH ---
 
-    # --- ADMIN WELCOME LOGIC (NEW) ---
+        # --- ADMIN WELCOME LOGIC (NEW) ---
     if user_id == ADMIN_USER_ID:
         admin_text = (
             f"🕶️ **SYSTEM COMMAND CENTER**\n"
@@ -1225,7 +1225,8 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
         admin_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📊 Open Live Dashboard", callback_data="admin_stats_cmd")]
         ])
-                await safe_tg_call(message.answer(admin_text, reply_markup=admin_kb), semaphore=TELEGRAM_COPY_SEMAPHORE)
+        # FIX: Indentation correct kiya hai (return hata diya hai)
+        await safe_tg_call(message.answer(admin_text, reply_markup=admin_kb), semaphore=TELEGRAM_COPY_SEMAPHORE)
     # --- END ADMIN WELCOME LOGIC ---
 
     if not await ensure_capacity_or_inform(message, db_primary, bot, redis_cache):
