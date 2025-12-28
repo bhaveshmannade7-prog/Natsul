@@ -673,7 +673,7 @@ async def load_fuzzy_cache(db: Database):
             movies_list = await safe_db_call(db.get_all_movies_for_fuzzy_cache(), timeout=300, default=[])
             temp_cache = {}
             if movies_list:
-                                for movie_dict in movies_list:
+                            for movie_dict in movies_list:
                     orig_clean = movie_dict.get('clean_title', '')
                     if orig_clean:
                          # FIX: Store list of movies to prevent shadowing (Bug #6)
