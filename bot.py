@@ -1736,7 +1736,7 @@ async def refresh_search_callback(callback: types.CallbackQuery, bot: Bot, redis
     limit_key = f"refresh_limit:{user.id}:{today}"
     
     current_count = 0
-        if redis_cache.is_ready():
+    if redis_cache.is_ready():
         cached_count = await redis_cache.get(limit_key)
         if cached_count:
             # FIX: Safe casting for Redis data (Bug #16)
@@ -1748,7 +1748,6 @@ async def refresh_search_callback(callback: types.CallbackQuery, bot: Bot, redis
     MAX_REFRESH_LIMIT = 20
     # FIX: Strict limit check for non-admins
     if current_count >= MAX_REFRESH_LIMIT and user.id != ADMIN_USER_ID:
-    if current_count >= MAX_REFRESH_LIMIT:
         await safe_tg_call(callback.answer("⚠️ Daily Search Limit Reached. Please try again tomorrow.", show_alert=True))
         return
 
