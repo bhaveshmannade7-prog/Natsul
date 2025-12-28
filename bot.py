@@ -1226,7 +1226,6 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
             [InlineKeyboardButton(text="📊 Open Live Dashboard", callback_data="admin_stats_cmd")]
         ])
                 await safe_tg_call(message.answer(admin_text, reply_markup=admin_kb), semaphore=TELEGRAM_COPY_SEMAPHORE)
-        # FIX: Removed 'return' so Admin can also search movies
     # --- END ADMIN WELCOME LOGIC ---
 
     if not await ensure_capacity_or_inform(message, db_primary, bot, redis_cache):
