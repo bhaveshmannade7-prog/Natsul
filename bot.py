@@ -753,12 +753,112 @@ def get_smart_match_score(query_tokens: List[str], target_clean: str) -> int:
 def python_fuzzy_search(query: str, limit: int = 10, **kwargs) -> List[Dict]:
     """
     Smart V6 Search: Hybrid approach with Intent Engine V6 Re-Ranking.
-    - Low DB/CPU consumption guaranteed by using in-memory fuzzy_movie_cache.
+    Fixed for Bug #6 (Shadowing) and Bug #2 (Thread Safety).
     """
-        # FIX: Thread Safety - Use local reference passed as argument
-    # (Note: Function signature change required, see Bug 2 Part B below)
+    # 1. Thread Safety: Snapshot le rahe hain
     current_cache = kwargs.get('cache_snapshot') or fuzzy_movie_cache
     if not current_cache:
+        return []
+
+    try:
+        q_fuzzy = clean_text_for_fuzzy(query) 
+        q_anchor = clean_text_for_search(query) 
+        
+        if not q_fuzzy or not q_anchor: return []
+        
+        query_tokens = [t for t in q_anchor.split() if t]
+        candidates = []
+        seen_imdb = set()
+        
+        # --- 1. EXACT MATCH ANCHOR (Bug #6: List Support Added) ---
+        anchor_keys = [q_anchor]
+        if q_anchor.startswith('the '):
+             anchor_keys.append(q_anchor[4:]) 
+        else:
+             anchor_keys.append('the ' + q_anchor) 
+
+        for key in set(anchor_keys):
+            if key in current_cache:
+                # Bug #6 Fix: Cache ab list return karega, single dict nahi
+                movies_list = current_cache[key]
+                
+                # Safety fallback: Agar galti se dict aa jaye (transition phase me)
+                if isinstance(movies_list, dict): movies_list = [movies_list]
+
+                for data in movies_list:
+                    if data['imdb_id'] not in seen_imdb:
+                         candidates.append({
+                            'imdb_id': data['imdb_id'],
+                            'title': data['title'],
+                            'year': data.get('year'),
+                            'score': 1001,
+                            'match_type': 'exact_anchor'
+                         })
+                         seen_imdb.add(data['imdb_id'])
+                         logger.debug(f"🎯 Exact Anchor Match: {data['title']}")
+        
+        # --- 2. RAPIDFUZZ BROAD FETCH ---
+        all_titles = list(current_cache.keys())
+        
+        # Smart Balance Settings (Limit 800, Cutoff 40) - Jo humne decide kiya tha
+        pre_filtered = process.extract(
+            q_fuzzy, 
+            all_titles, 
+            limit=800,  
+            scorer=fuzz.WRatio, 
+            score_cutoff=40 
+        )
+        
+        # --- 3. INTENT ENGINE V6 RE-RANKING (Bug #6: List Support Added) ---
+        for clean_title_key, fuzz_score, _ in pre_filtered:
+            movies_list = current_cache.get(clean_title_key)
+            if not movies_list: continue
+
+            # Safety fallback
+            if isinstance(movies_list, dict): movies_list = [movies_list]
+
+            # Bug #6 Fix: Iterate over all movies with same title
+            for data in movies_list:
+                if data['imdb_id'] in seen_imdb: continue
+                
+                t_clean_key = clean_title_key 
+                intent_score = get_smart_match_score(query_tokens, t_clean_key)
+                
+                final_score = 0
+                match_type = "fuzzy"
+                
+                if fuzz_score >= 95:
+                    final_score = 900 + intent_score
+                    match_type = "high_fuzzy"
+                elif intent_score > 50: 
+                    final_score = 500 + intent_score 
+                    match_type = "intent"
+                else:
+                    final_score = fuzz_score
+
+                candidates.append({
+                    'imdb_id': data['imdb_id'],
+                    'title': data['title'],
+                    'year': data.get('year'),
+                    'score': final_score,
+                    'match_type': match_type
+                })
+                seen_imdb.add(data['imdb_id'])
+
+        # 4. Final Sort & Deduplicate
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+        
+        unique_candidates = []
+        final_seen_imdb = set()
+        for c in candidates:
+            if c['imdb_id'] not in final_seen_imdb:
+                unique_candidates.append(c)
+                final_seen_imdb.add(c['imdb_id'])
+        
+        return unique_candidates[:limit]
+        
+    except Exception as e:
+        logger.error(f"python_fuzzy_search mein error: {e}", exc_info=True)
         return []
 
     try:
