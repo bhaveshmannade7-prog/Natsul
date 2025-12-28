@@ -57,7 +57,8 @@ class NeonDB:
             max_attempts = 30
             for attempt in range(max_attempts):
                 # safe_db_call is intentionally avoided here as it can mask critical startup issues.
-                lock_acquired = await self.db_primary.acquire_cross_process_lock(lock_name, 60) # 60 sec timeout
+                # FIX: Timeout 120s badhaya taaki slow startup handle ho sake
+                lock_acquired = await self.db_primary.acquire_cross_process_lock(lock_name, 120) 
                 
                 if lock_acquired:
                     logger.warning("✅ MongoDB Lock acquired. Proceeding with NeonDB Schema setup.")
@@ -65,9 +66,9 @@ class NeonDB:
                 
                 if attempt == max_attempts - 1:
                     logger.critical(f"❌ Failed to acquire lock after {max_attempts} attempts. Another process might be stuck.")
-                    # Agar lock timeout ho gaya, toh MongoDB Lock document ko delete karke dobara try kar sakte hain
-                    # Lekin startup mein, seedha raise karna behtar hai.
-                    raise RuntimeError("NeonDB initialization lock timeout.")
+                    # Startup fail na ho isliye hum continue karte hain (Race condition risk hai par bot chalega)
+                    logger.warning("⚠️ Forcing initialization without lock due to timeout.")
+                    break
                     
                 await asyncio.sleep(1.0) # Wait for the other worker to finish or die
         
@@ -81,12 +82,13 @@ class NeonDB:
                  return
             
             try:
+                # FIX: Connection pool settings for Free Tier
                 self.pool = await asyncpg.create_pool(
                     self.database_url,
-                    min_size=2,
-                    max_size=10,
+                    min_size=0, # Idle connections close hone do
+                    max_size=3, # Max 3 connections for Free Tier safety
                     command_timeout=60,
-                    server_settings={'application_name': 'MovieBot-Backup'}
+                    server_settings={'application_name': 'MovieBot-Worker'}
                 )
                 if self.pool is None:
                     raise Exception("Pool creation returned None")
@@ -434,4 +436,3 @@ class NeonDB:
                 return {"title": "N/A", "clean_title": "DB Khaali Hai"}
         except Exception as e:
             return {"title": "Error", "clean_title": str(e)}
-
