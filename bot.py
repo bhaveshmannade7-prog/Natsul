@@ -2475,7 +2475,7 @@ async def import_json_command(message: types.Message, db_primary: Database, db_f
         
     msg = await safe_tg_call(message.answer(f"📥 **Downloading**: `{doc.file_name}`..."), semaphore=TELEGRAM_COPY_SEMAPHORE)
     if not msg: return
-        try:
+    try:
         file = await bot.get_file(doc.file_id);
         if file.file_path is None: await safe_tg_call(msg.edit_text(f"❌ **Error**: Path missing.")); return
         
