@@ -984,7 +984,8 @@ async def lifespan(app: FastAPI):
     try:
         # F.I.X: init_db coroutine ko execute karein aur safe_db_call se wrap karein
         # safe_db_call ab connection error ko False mein badal dega.
-        db1_success = await safe_db_call(db_primary.init_db(), default=False) 
+        db1_success = await safe_db_call(db_primary.init_db(), timeout=60, default=False) 
+
         if db1_success:
              logger.info("Database 1 (MongoDB Primary) initialization safal.")
         else:
