@@ -1164,6 +1164,11 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
     user = message.from_user
     if not user: return
     user_id = user.id
+        # FIX: Security Check for Banned Users
+    is_banned = await safe_db_call(db_primary.is_user_banned(user_id), default=False)
+    if is_banned and user_id != ADMIN_USER_ID:
+        await message.answer("🚫 **Access Denied**: You are banned.")
+        return
 
     # --- FEATURE B: MONETIZATION TOKEN CATCH ---
     args = message.text.split()
@@ -1211,8 +1216,8 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
         admin_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📊 Open Live Dashboard", callback_data="admin_stats_cmd")]
         ])
-        await safe_tg_call(message.answer(admin_text, reply_markup=admin_kb), semaphore=TELEGRAM_COPY_SEMAPHORE)
-        return
+                await safe_tg_call(message.answer(admin_text, reply_markup=admin_kb), semaphore=TELEGRAM_COPY_SEMAPHORE)
+        # FIX: Removed 'return' so Admin can also search movies
     # --- END ADMIN WELCOME LOGIC ---
 
     if not await ensure_capacity_or_inform(message, db_primary, bot, redis_cache):
