@@ -686,7 +686,7 @@ class Database:
         ids_to_delete = []
         
         try:
-            async for group in self.movies.aggregate(pipeline):
+            async for group in self.movies.aggregate(pipeline, allowDiskUse=True):
                 duplicates_found_pass += (group['count'] - 1)
                 
                 sorted_docs = sorted(
