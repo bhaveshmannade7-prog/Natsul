@@ -185,9 +185,9 @@ class Database:
             # Text search ke liye special index
             await self.create_mongo_text_index()
             
-            logger.info("Database indexes created/verified।")
+                        logger.info("Database indexes created/verified।")
             return True # F.I.X: Success hone par True return karein
-                except Exception as e:
+        except Exception as e:
             logger.critical(f"❌ CRITICAL: Database Index Creation Failed: {e}", exc_info=True)
             # Return True to allow bot start (degraded mode), but logged as CRITICAL
             return True 
@@ -862,6 +862,8 @@ class Database:
             return []
 
     # --- NAYA FUNCTION: 'rapidfuzz' ke liye data load karega (Redis Hook) ---
+    
+            # --- NAYA FUNCTION: 'rapidfuzz' ke liye data load karega (Redis Hook) ---
     async def get_all_movies_for_fuzzy_cache(self) -> List[Dict]:
         """
         Python in-memory fuzzy search ke liye sabhi unique movie titles load karta hai।
@@ -878,6 +880,46 @@ class Database:
         if not await self.is_ready(): 
             return []
         
+        try:
+            # FIX: Memory Optimized Fetch (No Aggregation)
+            # Hum sirf raw data layenge aur Python mein dedup karenge (Faster for Free Tier)
+            cursor = self.movies.find(
+                {}, 
+                {"imdb_id": 1, "title": 1, "year": 1, "clean_title": 1, "_id": 0}
+            )
+            
+            raw_movies = []
+            async for m in cursor:
+                 raw_movies.append(m)
+
+            # Python Deduplication (Last one stays logic not guaranteed here but safer for RAM)
+            # Agar exact 'latest' chahiye to client side sort karein, par fuzzy cache ke liye zaroori nahi
+            movies_dict = {}
+            for m in raw_movies:
+                if not m.get('clean_title'):
+                    m['clean_title'] = clean_text_for_search(m.get('title', ''))
+                
+                # Dictionary key override handles duplicates automatically
+                movies_dict[m['imdb_id']] = {
+                    'imdb_id': m["imdb_id"],
+                    'title': m.get("title", "N/A"),
+                    'year': m.get("year"),
+                    'clean_title': m.get("clean_title")
+                }
+            
+            movies = list(movies_dict.values())
+
+            # --- HOOK 4: Agar Mongo se load hua, toh Redis mein save karein ---
+            if movies and redis_cache.is_ready():
+                # Dictionary banana jiske keys 'clean_title' hon
+                cache_dict = {m['clean_title']: m for m in movies if m.get('clean_title')}
+                asyncio.create_task(redis_cache.save_fuzzy_cache(cache_dict))
+            # --- END HOOK 4 ---
+
+            return movies
+        except Exception as e:
+            logger.error(f"get_all_movies_for_fuzzy_cache error: {e}", exc_info=True)
+            return []
         try:
                         # FIX: Memory Optimized Fetch (No Aggregation)
             # Hum sirf raw data layenge aur Python mein dedup karenge (Faster for Free Tier)
