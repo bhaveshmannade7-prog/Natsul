@@ -1619,7 +1619,22 @@ async def search_movie_handler(message: types.Message, bot: Bot, db_primary: Dat
 
     if not await ensure_capacity_or_inform(message, db_primary, bot, redis_cache):
         return
-        
+            # --- FIX START: Force Join Check Before Search ---
+    # Agar user member nahi hai, toh search rok do aur Join buttons dikhao
+    is_member = await check_user_membership(user.id, bot)
+    if not is_member:
+        join_markup = get_join_keyboard()
+        if join_markup:
+            join_text = (
+                f"🔒 **UNLOCK SEARCH ACCESS**\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️ You must join our channels to search for movies.\n\n"
+                f"1️⃣ **Join the channels** below.\n"
+                f"2️⃣ Tap **Verify Membership** to unlock."
+            )
+            await safe_tg_call(message.answer(join_text, reply_markup=join_markup), semaphore=TELEGRAM_COPY_SEMAPHORE)
+            return
+    # --- FIX END ---
     original_query = message.text.strip()
     if len(original_query) < 2:
         await safe_tg_call(message.answer("⚠️ **Query too short.** Please enter at least 2 characters."), semaphore=TELEGRAM_COPY_SEMAPHORE)
@@ -1836,6 +1851,24 @@ async def get_movie_callback(callback: types.CallbackQuery, bot: Bot, db_primary
         return
         
     await safe_tg_call(callback.answer("📥 Retrieving Content..."))
+        # --- FIX START: Force Join Check on Download Button ---
+    is_member = await check_user_membership(user.id, bot)
+    if not is_member:
+        join_markup = get_join_keyboard()
+        if join_markup:
+            # Agar member nahi hai, toh wahi message edit karke join button dikhao
+            join_text = (
+                f"🔒 **ACCESS DENIED**\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"⚠️ You must join our channels to download this file.\n\n"
+                f"👇 Join below and tap **Verify Membership**."
+            )
+            try:
+                await safe_tg_call(callback.message.edit_text(join_text, reply_markup=join_markup))
+            except Exception:
+                await safe_tg_call(bot.send_message(user.id, join_text, reply_markup=join_markup), semaphore=TELEGRAM_COPY_SEMAPHORE)
+            return
+    # --- FIX END ---
     
     if not await ensure_capacity_or_inform(callback, db_primary, bot, redis_cache):
         return
