@@ -2632,7 +2632,8 @@ async def import_json_command(message: types.Message, db_primary: Database, db_f
         try:
             fid = item.get("file_id"); fname = item.get("title")
             if not fid or not fname: s += 1; continue
-                        fid_str = str(fid); file_unique_id = item.get("file_unique_id") or fid_str 
+            
+            fid_str = str(fid); file_unique_id = item.get("file_unique_id") or fid_str 
             # FIX: Use UUID to prevent ID collisions (Bug #7)
             imdb = f"json_{uuid.uuid5(uuid.NAMESPACE_DNS, fid_str).hex[:12]}"
             message_id = item.get("message_id") or AUTO_MESSAGE_ID_PLACEHOLDER
