@@ -12,7 +12,7 @@ import uuid # Naya: Unique IDs ke liye
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from typing import List, Dict, Callable, Any
-from functools import wraps
+from functools import wraps, partial
 import concurrent.futures
 
 # --- Load dotenv FIRST ---
