@@ -744,7 +744,7 @@ def get_smart_match_score(query_tokens: List[str], target_clean: str) -> int:
     
     return score
 
-def python_fuzzy_search(query: str, limit: int = 10) -> List[Dict]:
+def python_fuzzy_search(query: str, limit: int = 10, **kwargs) -> List[Dict]:
     """
     Smart V6 Search: Hybrid approach with Intent Engine V6 Re-Ranking.
     - Low DB/CPU consumption guaranteed by using in-memory fuzzy_movie_cache.
