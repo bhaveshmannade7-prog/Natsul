@@ -1536,8 +1536,11 @@ async def search_movie_handler(message: types.Message, bot: Bot, db_primary: Dat
     cache_snapshot = fuzzy_movie_cache.copy() # Shallow copy is enough and fast
     fuzzy_hits_task = loop.run_in_executor(executor, partial(python_fuzzy_search, cache_snapshot=cache_snapshot), original_query, 45)
   
-    fuzzy_hits_raw = await fuzzy_hits_task
-    if fuzzy_hits_raw is None: fuzzy_hits_raw = []
+    try:
+        fuzzy_hits_raw = await fuzzy_hits_task
+    except Exception as e:
+        logger.error(f"Search Executor Failed: {e}")
+        fuzzy_hits_raw = []
 
     unique_movies = {}
     for movie in fuzzy_hits_raw:
