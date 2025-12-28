@@ -672,8 +672,8 @@ async def load_fuzzy_cache(db: Database):
             # get_all_movies_for_fuzzy_cache is an async method in database.py
             movies_list = await safe_db_call(db.get_all_movies_for_fuzzy_cache(), timeout=300, default=[])
             temp_cache = {}
-                        if movies_list:
-                # FIX: Indentation correct kiya gaya hai
+            
+            if movies_list:
                 for movie_dict in movies_list:
                     orig_clean = movie_dict.get('clean_title', '')
                     if orig_clean:
@@ -681,6 +681,7 @@ async def load_fuzzy_cache(db: Database):
                          if orig_clean not in temp_cache:
                              temp_cache[orig_clean] = []
                          temp_cache[orig_clean].append(movie_dict)
+                
                 fuzzy_movie_cache = temp_cache
                 logger.info(f"✅ In-Memory Fuzzy Cache {len(fuzzy_movie_cache):,} unique titles ke saath loaded.")
             else:
