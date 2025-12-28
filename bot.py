@@ -2425,17 +2425,11 @@ async def rem_dupes_freeze_fix(message: types.Message, db_primary: Database, db_
 async def broadcast_command(message: types.Message, db_primary: Database):
     if not message.reply_to_message:
         await safe_tg_call(message.answer("⚠️ **Broadcast Error**: Reply to a message to broadcast."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
-        # FIX: Memory Efficient Iterator (Assuming db supports async iteration or use fallback)
-    users_cursor = await safe_db_call(db_primary.get_all_users_cursor(), default=None) 
-    
-    # FIX: Cursor ko List me convert karna zaroori hai
-    if users_cursor and hasattr(users_cursor, 'to_list'):
-         # Motor cursor ko list me badlo
-         users = await users_cursor.to_list(length=None)
-    elif not users_cursor:
-         users = await safe_db_call(db_primary.get_all_users(limit=None), default=[])
-    else:
-         users = list(users_cursor) if users_cursor else []
+        
+    # --- FIX START: Error yahan tha ---
+    # 'get_all_users_cursor' aapke DB me nahi hai, isliye direct 'get_all_users' use karenge
+    # Ye function list return karega
+    users = await safe_db_call(db_primary.get_all_users(), default=[]) 
     
     if not users:
         await safe_tg_call(message.answer("⚠️ **Broadcast Error**: No users found."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
@@ -2458,18 +2452,24 @@ async def broadcast_command(message: types.Message, db_primary: Database):
             await safe_db_call(db_primary.deactivate_user(user_id))
         else: failed_count += 1
 
-        last_update_time = start_broadcast_time
+    last_update_time = start_broadcast_time
+    
+    # --- FIX Loop Logic: Handle both Dictionary and Integer ---
     for i, user_data in enumerate(users):
-        # FIX: Database se pura object aata hai, usme se ID nikalo
+        # Agar user_data dict hai (e.g. {'user_id': 123}), to ID nikalo
+        # Agar seedha int hai (e.g. 123), to waisa hi use karo
         target_id = user_data if isinstance(user_data, int) else user_data.get('user_id')
         
-        if not target_id: continue # Agar ID nahi mili to skip
+        if not target_id: continue
 
         tasks.append(send_to_user(target_id))
         processed_count = i + 1
         now = datetime.now(timezone.utc)
+        
+        # Batch processing (Har 100 users ya 15 seconds me execute karo)
         if processed_count % 100 == 0 or (now - last_update_time).total_seconds() > 15 or processed_count == total:
-            await asyncio.gather(*tasks); tasks = []
+            await asyncio.gather(*tasks)
+            tasks = []
             elapsed = (now - start_broadcast_time).total_seconds()
             speed = processed_count / elapsed if elapsed > 0 else 0
             try:
