@@ -2475,19 +2475,28 @@ async def import_json_command(message: types.Message, db_primary: Database, db_f
         
     msg = await safe_tg_call(message.answer(f"📥 **Downloading**: `{doc.file_name}`..."), semaphore=TELEGRAM_COPY_SEMAPHORE)
     if not msg: return
-    try:
+        try:
         file = await bot.get_file(doc.file_id);
         if file.file_path is None: await safe_tg_call(msg.edit_text(f"❌ **Error**: Path missing.")); return
-                fio.seek(0, os.SEEK_END)
+        
+        # --- FIX START: Download & Size Check ---
+        fio = io.BytesIO()
+        await bot.download_file(file.file_path, fio)
+
+        # File size check karein
+        fio.seek(0, os.SEEK_END)
         file_size = fio.tell()
         fio.seek(0)
         
-        # FIX: RAM Safety Limit (Max 30MB for Free Tier)
+        # 30MB Limit check
         if file_size > 30 * 1024 * 1024:
             await safe_tg_call(msg.edit_text("❌ **File Too Large**: Max limit is 30MB for JSON imports."))
             return
+        # --- FIX END ---
+
         # JSON parsing is CPU bound, run in executor
         mlist = await loop.run_in_executor(executor, lambda: json.loads(fio.read().decode('utf-8')))
+
         assert isinstance(mlist, list)
     except Exception as e:
         await safe_tg_call(msg.edit_text(f"❌ **Parse Error**: {e}")); logger.exception("JSON download/parse error"); return
