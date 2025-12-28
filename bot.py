@@ -213,8 +213,15 @@ async def run_in_background(task_func, message: types.Message, *args, **kwargs):
 async def get_shortened_link(long_url, db: Database):
     """Generates monetized link from Admin Settings."""
     api_url = await db.get_config("shortlink_api", "https://shareus.io/api?api=KEY&url={url}")
-    # Return formatted shortlink
-    return api_url.format(url=long_url)
+    # FIX: Robust formatting to prevent revenue loss (Bug #14)
+    try:
+        return api_url.format(url=long_url)
+    except KeyError:
+        # Fallback: Agar {url} placeholder missing hai to append kar do
+        return f"{api_url}&url={long_url}"
+    except Exception:
+        # Worst case: Original URL return karo taaki user block na ho
+        return long_url
 
 # ============ WEBHOOK URL ============
 def build_webhook_url() -> str:
