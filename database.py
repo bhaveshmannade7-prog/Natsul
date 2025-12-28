@@ -185,12 +185,13 @@ class Database:
             # Text search ke liye special index
             await self.create_mongo_text_index()
             
-            logger.info("Database indexes created/verified।")
+                        logger.info("Database indexes created/verified।")
             return True # F.I.X: Success hone par True return karein
-                except Exception as e:
+        except Exception as e:
             logger.critical(f"❌ CRITICAL: Database Index Creation Failed: {e}", exc_info=True)
             # Return True to allow bot start (degraded mode), but logged as CRITICAL
             return True 
+
 
 
     # ==========================================
@@ -862,6 +863,7 @@ class Database:
             return []
 
     # --- NAYA FUNCTION: 'rapidfuzz' ke liye data load karega (Redis Hook) ---
+        # --- NAYA FUNCTION: 'rapidfuzz' ke liye data load karega (Redis Hook) ---
     async def get_all_movies_for_fuzzy_cache(self) -> List[Dict]:
         """
         Python in-memory fuzzy search ke liye sabhi unique movie titles load karta hai।
@@ -879,7 +881,7 @@ class Database:
             return []
         
         try:
-                        # FIX: Memory Optimized Fetch (No Aggregation)
+            # FIX: Memory Optimized Fetch (No Aggregation)
             # Hum sirf raw data layenge aur Python mein dedup karenge (Faster for Free Tier)
             cursor = self.movies.find(
                 {}, 
@@ -906,17 +908,6 @@ class Database:
                 }
             
             movies = list(movies_dict.values())
-            # Loop hataya kyunki humne upar hi dictionary bana li hai
-                if not m.get('clean_title'):
-                    # Search Bug Fix: Agar clean_title missing hai, to runtime mein generate karein.
-                    m['clean_title'] = clean_text_for_search(m.get('title', ''))
-                
-                movies.append({
-                    'imdb_id': m["imdb_id"],
-                    'title': m.get("title", "N/A"),
-                    'year': m.get("year"),
-                    'clean_title': m.get("clean_title")
-                })
 
             # --- HOOK 4: Agar Mongo se load hua, toh Redis mein save karein ---
             if movies and redis_cache.is_ready():
