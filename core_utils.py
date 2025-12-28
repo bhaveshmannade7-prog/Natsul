@@ -9,10 +9,11 @@ logger = logging.getLogger("bot.core_utils")
 TG_OP_TIMEOUT = 8
 DB_OP_TIMEOUT = 10 
 
-DB_SEMAPHORE = asyncio.Semaphore(15)
+# FIX: Reduced limits for Free Tier stability
+DB_SEMAPHORE = asyncio.Semaphore(5) # Reduced from 15 to 5
 TELEGRAM_DELETE_SEMAPHORE = asyncio.Semaphore(10)
-TELEGRAM_COPY_SEMAPHORE = asyncio.Semaphore(15)
-TELEGRAM_BROADCAST_SEMAPHORE = asyncio.Semaphore(25)
+TELEGRAM_COPY_SEMAPHORE = asyncio.Semaphore(10) # Reduced from 15 to 10
+TELEGRAM_BROADCAST_SEMAPHORE = asyncio.Semaphore(15) # Reduced from 25 to 15
 WEBHOOK_SEMAPHORE = asyncio.Semaphore(1) 
 
 
