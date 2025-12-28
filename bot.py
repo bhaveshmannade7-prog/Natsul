@@ -569,7 +569,8 @@ def clean_text_for_search(text: str) -> str:
     text = text.lower()
     # Separators ko space se badle (DB clean logic se synchronize)
     text = re.sub(r"[._\-]+", " ", text) 
-    text = re.sub(r"\b(s|season)\s*\d{1,2}\b", "", text)
+    # FIX: Better regex to only remove S01/Season 1 constructs (Bug #15)
+    text = re.sub(r"\b(s|season)\s*\d{1,2}(?!\d)", " ", text)
     # Sirf a-z, 0-9, aur space rakhein
     text = re.sub(r"[^a-z0-9\s]+", "", text) 
     # Extra spaces hatayein
