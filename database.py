@@ -185,7 +185,7 @@ class Database:
             # Text search ke liye special index
             await self.create_mongo_text_index()
             
-                        logger.info("Database indexes created/verified।")
+            logger.info("Database indexes created/verified।")
             return True # F.I.X: Success hone par True return karein
         except Exception as e:
             logger.critical(f"❌ CRITICAL: Database Index Creation Failed: {e}", exc_info=True)
