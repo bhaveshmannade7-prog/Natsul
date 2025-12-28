@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import os
-import psutil # Naya dependency: Process monitoring
+import psutil # Resource monitoring
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
 
@@ -10,17 +10,17 @@ from typing import Dict, Any
 from core_utils import safe_tg_call 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
-from queue_wrapper import priority_queue, PRIORITY_ADMIN, QUEUE_CONCURRENCY
-
+from queue_wrapper import priority_queue
 
 logger = logging.getLogger("bot.watchdog")
 
 # --- Configuration ---
-ADMIN_ID = int(os.getenv("ADMIN_USER_ID", "7263519581")) # Using your provided ID as default
+ADMIN_ID = int(os.getenv("ADMIN_USER_ID", "7263519581"))
 WATCHDOG_ENABLED = os.getenv("WATCHDOG_ENABLED", "True").lower() == 'true'
-CHECK_INTERVAL = int(os.getenv("WATCHDOG_INTERVAL", "60")) # 60 seconds
-CPU_ALERT_THRESHOLD = 80.0 # CPU usage over 80%
-QUEUE_STUCK_THRESHOLD = 30 # Queue stuck for 30 seconds
+CHECK_INTERVAL = int(os.getenv("WATCHDOG_INTERVAL", "60")) # 60 seconds default
+CPU_ALERT_THRESHOLD = 85.0 # Alert if CPU > 85%
+RAM_ALERT_THRESHOLD = 85.0 # Alert if RAM > 85% (Critical for Free Tier)
+QUEUE_STUCK_THRESHOLD = 45 # Alert if a task is stuck for > 45s
 
 class SmartWatchdog:
     def __init__(self, bot_instance: Bot, dp_instance: Any, db_objects: Dict[str, Any]):
@@ -29,181 +29,157 @@ class SmartWatchdog:
         self.db_primary = db_objects['db_primary']
         self.db_neon = db_objects['db_neon']
         self.redis_cache = db_objects['redis_cache']
-        self.last_check_time = datetime.now(timezone.utc)
-        self.last_cpu_percent = 0.0
-        self.freeze_prediction_count = 0
+        
+        self.owner_id = ADMIN_ID
         self.is_running = False
         self.task: asyncio.Task | None = None
-        self.last_webhook_check_time = datetime.now(timezone.utc)
-        self.owner_id = ADMIN_ID
+        
+        # Smart Alert Throttling (To prevent spamming admin)
+        self.alert_history = {} 
+        self.ALERT_COOLDOWN = 900 # 15 Minutes cooldown per alert type
 
-    async def _send_alert(self, title: str, details: str):
-        """Admin ko private DM mein alert bhejta hai।"""
-        if self.owner_id == 0:
-            logger.warning(f"Watchdog Alert (No Admin ID): {title}")
+    async def _send_alert(self, alert_key: str, title: str, details: str):
+        """Sends alert to Admin with throttling logic."""
+        if self.owner_id == 0: return
+
+        # Throttling Check: Agar abhi haal hi mein ye alert bheja tha, to skip karo
+        last_sent = self.alert_history.get(alert_key)
+        now = datetime.now(timezone.utc)
+        if last_sent and (now - last_sent).total_seconds() < self.ALERT_COOLDOWN:
+            logger.warning(f"Watchdog Alert Suppressed (Cooldown): {title}")
             return
-            
+
+        # Update last sent time
+        self.alert_history[alert_key] = now
+        
+        uptime_seconds = (now - self.dp.start_time).total_seconds()
+        uptime_str = f"{int(uptime_seconds // 3600)}h {int((uptime_seconds % 3600) // 60)}m"
+
         alert_message = (
-            f"🐶 <b>SMART WATCHDOG ALERT: {title}</b>\n\n"
-            f"<b>Details:</b> {details}\n"
-            f"<b>Server Time:</b> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
-            f"<b>Uptime:</b> {(datetime.now(timezone.utc) - self.dp.start_time).total_seconds() // 60:.0f} minutes\n"
-            f"---\n"
-            f"<b>Recommended Action:</b> Kripya server logs aur DB connections check karein."
+            f"🐶 <b>SMART WATCHDOG ALERT</b>\n"
+            f"⚠️ <b>{title}</b>\n\n"
+            f"📝 <b>Details:</b> {details}\n"
+            f"🕒 <b>Time:</b> {now.strftime('%H:%M:%S UTC')}\n"
+            f"⏳ <b>Uptime:</b> {uptime_str}\n"
+            f"🛡️ <i>System is monitoring...</i>"
         )
-        # Use safe_tg_call to prevent watchdog alert from causing more flood
-        await safe_tg_call(
+        
+        # Fire and forget (safe call)
+        asyncio.create_task(safe_tg_call(
             self.bot.send_message(self.owner_id, alert_message),
-            timeout=10 
-        )
+            timeout=10
+        ))
         logger.error(f"Watchdog Alert Sent: {title}")
 
-    async def _monitor_cpu_and_freeze(self):
-        """CPU high load aur Event Loop freeze ko monitor karta hai।"""
-        # Rule: CPU usage reduction strategies
+    async def _monitor_resources(self):
+        """Monitors CPU, RAM, and Disk Usage."""
         try:
-            # CPU utilization (non-blocking call, can take time)
-            cpu_percent = psutil.cpu_percent(interval=None) 
-            self.last_cpu_percent = cpu_percent
+            # 1. CPU Check
+            cpu = psutil.cpu_percent(interval=None)
+            if cpu >= CPU_ALERT_THRESHOLD:
+                await self._send_alert("high_cpu", "🔥 HIGH CPU LOAD", f"CPU Usage is at {cpu}%. Workers might be overloaded.")
 
-            # 1. CPU High Load Alert (Predict freeze risk)
-            if cpu_percent >= CPU_ALERT_THRESHOLD:
+            # 2. RAM Check (Critical for Render/AWS Free Tier)
+            ram = psutil.virtual_memory()
+            if ram.percent >= RAM_ALERT_THRESHOLD:
+                used_mb = ram.used // 1024 // 1024
                 await self._send_alert(
-                    "🔴 HIGH CPU LOAD PREDICTION",
-                    f"Current CPU usage: {cpu_percent:.2f}%. Load {CPU_ALERT_THRESHOLD}% threshold se upar hai. Workers/Threads kaafi busy hain."
+                    "high_ram", 
+                    "💾 HIGH RAM USAGE (OOM RISK)", 
+                    f"RAM Usage: {ram.percent}% ({used_mb}MB used). Bot crash risk high!"
                 )
 
-            # 2. Queue Stuck / Worker Freeze Detection (Queue stuck / worker freeze detect kare)
-            queue_size = priority_queue._queue.qsize()
-            
-            if queue_size > 0:
-                # Non-blocking way to check head of queue
-                if not priority_queue._queue.empty():
-                    # PriorityQueue stores item: (priority, timestamp, update, ...)
-                    _, timestamp, _, *rest = priority_queue._queue._queue[0]
-                    stuck_duration = (datetime.now(timezone.utc) - timestamp).total_seconds()
-                    
-                    if stuck_duration >= QUEUE_STUCK_THRESHOLD:
-                         self.freeze_prediction_count += 1
-                         
-                         if self.freeze_prediction_count >= 2: # 2 consecutive checks
-                             await self._send_alert(
-                                "🚨 WORKER/QUEUE FREEZE DETECTED",
-                                f"High queue size ({queue_size}) aur oldest request {stuck_duration:.1f}s se stuck hai. Workers freeze ho sakte hain."
-                            )
-                             self.freeze_prediction_count = 0
-                    else:
-                         self.freeze_prediction_count = 0
-            
+            # 3. Disk Check (Logs filling up)
+            disk = psutil.disk_usage('.')
+            if disk.percent >= 90:
+                await self._send_alert("high_disk", "💿 LOW DISK SPACE", f"Disk usage is at {disk.percent}%. Cleanup required.")
+
         except Exception as e:
-            logger.error(f"CPU Monitor failed: {e}", exc_info=False)
+            logger.error(f"Resource monitor error: {e}")
 
-
-    async def _monitor_db_health(self):
-        """DB connectivity aur overload status check karta hai।"""
-        
-        # 1. MongoDB Health Check (Low latency ping)
-        mongo_ready = await self.db_primary.is_ready() 
-        if not mongo_ready:
-             await self._send_alert(
-                 "❌ MONGO DB OFFLINE/DISCONNECTED",
-                 "Primary MongoDB cluster se connection toot gaya hai. Critical services fail ho sakte hain."
-             )
-             
-        # 2. NeonDB Health Check
-        neon_ready = await self.db_neon.is_ready()
-        if not neon_ready:
-             await self._send_alert(
-                 "❌ NEON DB OFFLINE/DISCONNECTED",
-                 "Neon PostgreSQL cluster se connection toot gaya hai. File index/backup fail ho rahe honge."
-             )
-             
-        # 3. Redis Health Check (Redis down/slow ho to alert bheje)
-        redis_ready = self.redis_cache.is_ready()
-        if self.redis_cache.redis and not redis_ready:
-            await self._send_alert(
-                "⚠️ REDIS OFFLINE/SLOW",
-                "Redis Cache Node unavailable ya bahut slow hai. Throttling load ab MongoDB par jayega (CPU risk)."
-            )
-
-    async def _monitor_tg_and_webhook(self):
-        """Telegram flood lock, token status aur webhook status check karta hai।"""
-        
-        # 1. Check Token Rotation Fail / Flood-Lock Status
+    async def _monitor_queue_health(self):
+        """Checks for frozen workers or stuck queue items."""
         try:
-            # Low-cost Telegram operation (getting chat info for admin is safe)
-            await safe_tg_call(
-                self.bot.get_chat(chat_id=self.owner_id),
-                timeout=5
-            )
+            # Access the underlying PriorityQueue instance
+            queue_instance = priority_queue._queue
+            queue_size = queue_instance.qsize()
             
-            # Webhook Inactivity/Delay (Simple check)
-            current_webhook = await safe_tg_call(self.bot.get_webhook_info())
-            if current_webhook and current_webhook.pending_update_count > 100:
-                 await self._send_alert(
-                    "⚠️ WEBHOOK BACKLOG/DELAY",
-                    f"Telegram par {current_webhook.pending_update_count} updates pending hain. Webhook process hone mein deri ho rahi hai."
-                 )
-                 
-        except TelegramRetryAfter as e:
-            await self._send_alert(
-                "🚫 TELEGRAM FLOOD LOCK",
-                f"Bot ko Telegram ne flood-lock mein daal diya hai ({e.retry_after}s). Requests discard ho rahi hongi. (Token Rotation Fail/flood-lock detect kare)"
-            )
-        except TelegramAPIError as e:
-             error_msg = str(e)
-             # Token rotation fail/flood-lock detect kare
-             if "Unauthorized" in error_msg or "Invalid token" in error_msg:
-                 await self._send_alert(
-                     "🔑 BOT TOKEN AUTH FAILURE",
-                     "Bot ka main token invalid ya expired ho gaya hai. Kripya .env mein BOT_TOKEN update karein."
-                 )
-             else:
-                 logger.error(f"TG Monitor API Error: {e}", exc_info=False)
+            # Safe Queue Peek
+            if queue_size > 0:
+                try:
+                    # Access internal deque/list safely to see the oldest item
+                    # Internal structure: _queue._queue is a list (heap)
+                    internal_queue = queue_instance._queue
+                    if internal_queue:
+                        # Item structure: (priority, timestamp, update, bot, db_objects)
+                        # We index [0] because it's a heap (smallest item = highest priority/oldest)
+                        oldest_item = internal_queue[0]
+                        timestamp = oldest_item[1]
+                        
+                        stuck_duration = (datetime.now(timezone.utc) - timestamp).total_seconds()
+                        
+                        if stuck_duration > QUEUE_STUCK_THRESHOLD:
+                            await self._send_alert(
+                                "queue_stuck", 
+                                "🧊 WORKER FREEZE / QUEUE STUCK", 
+                                f"Queue has {queue_size} items pending.\nOldest task stuck for {stuck_duration:.1f}s.\nWorkers might be dead."
+                            )
+                except IndexError:
+                    pass # Queue emptied while checking
+                except Exception as qe:
+                    logger.warning(f"Could not peek queue internals (structure changed?): {qe}")
         except Exception as e:
-             logger.error(f"TG Monitor failed: {e}", exc_info=False)
+            logger.error(f"Queue monitor error: {e}")
 
+    async def _monitor_services(self):
+        """Checks Databases and Redis Connectivity."""
+        # 1. MongoDB
+        if not await self.db_primary.is_ready():
+            await self._send_alert("mongo_down", "❌ MONGODB PRIMARY DOWN", "Connection to MongoDB Atlas failed. Bot functionality is limited.")
+
+        # 2. NeonDB
+        if not await self.db_neon.is_ready():
+            await self._send_alert("neon_down", "❌ NEON DB DOWN", "Connection to Neon PostgreSQL failed. Search/Backup affected.")
+
+        # 3. Redis
+        if self.redis_cache.redis and not self.redis_cache.is_ready():
+            await self._send_alert("redis_down", "⚠️ REDIS DOWN", "Redis Cache is unreachable. System falling back to DB (Slower).")
 
     async def run_watchdog(self):
-        """Main periodic watchdog loop।"""
+        """Main Watchdog Loop"""
         if not WATCHDOG_ENABLED:
-            logger.warning("Watchdog is disabled via WATCHDOG_ENABLED=False in .env.")
             return
+        
+        logger.info(f"Smart Watchdog Active (Interval: {CHECK_INTERVAL}s)")
+        
+        # Initial Warmup Delay (Let bot start fully)
+        await asyncio.sleep(15)
 
-        self.is_running = True
-        logger.info(f"Smart Watchdog started (Interval: {CHECK_INTERVAL}s).")
-        
-        # Small initial delay to let DB connections stabilize
-        await asyncio.sleep(5) 
-        
         while self.is_running:
             try:
-                # Run monitoring tasks concurrently to save time
+                # Run all checks in parallel to save time
                 await asyncio.gather(
-                    self._monitor_cpu_and_freeze(),
-                    self._monitor_db_health(),
-                    self._monitor_tg_and_webhook(),
+                    self._monitor_resources(),
+                    self._monitor_queue_health(),
+                    self._monitor_services(),
                     return_exceptions=True
                 )
-                
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.critical(f"Watchdog main loop failed: {e}", exc_info=True)
+                logger.critical(f"Watchdog Loop Crash: {e}", exc_info=True)
+                await asyncio.sleep(5) # Short sleep on crash
             
             await asyncio.sleep(CHECK_INTERVAL)
 
     def start(self):
-        """Watchdog ko shuru karta hai।"""
-        if WATCHDOG_ENABLED and not self.is_running and self.owner_id != 0:
-            # Rule: background me chalega.
+        if WATCHDOG_ENABLED and not self.is_running:
+            self.is_running = True
             self.task = asyncio.create_task(self.run_watchdog())
-            return True
-        return False
-        
+            logger.info("Watchdog task started.")
+
     def stop(self):
-        """Watchdog ko band karta hai।"""
         if self.task:
             self.task.cancel()
             self.is_running = False
-            logger.info("Smart Watchdog stopped.")
+            logger.info("Watchdog task stopped.")
