@@ -170,40 +170,53 @@ HANDLER_TIMEOUT = 15
 # DB_OP_TIMEOUT is imported from core_utils
 
 # ============ NEW: BACKGROUND TASK WRAPPER (FREEZE FIX) ============
+# ============ NEW: BACKGROUND TASK WRAPPER (FREEZE FIX + CANCEL SUPPORT) ============
 async def run_in_background(task_func, message: types.Message, *args, **kwargs):
     """
-    Prevents Bot Freeze by running heavy sync logic as a background task.
-    MAIN SOLUTION FOR PROBLEM:Worker Freeze.
-    Uses Cross-Process locking to ensure one task at a time across all Gunicorn workers.
+    Prevents Bot Freeze, Supports Cancellation, and Handles Locking.
     """
     db_primary = kwargs.get('db_primary')
+    user_id = message.from_user.id
+    
+    # Check if admin already has a running task
+    if user_id in ADMIN_ACTIVE_TASKS and not ADMIN_ACTIVE_TASKS[user_id].done():
+         await message.answer("⚠️ **Task Already Running**\nYou have an active task. Use /cancel to stop it first.")
+         return
+
     lock_name = f"task_lock_{task_func.__name__}"
     
     try:
-        # Acquire Cross-Process Lock to prevent parallel execution (BUG-4)
+        # Acquire Lock
         lock_acquired = await safe_db_call(db_primary.acquire_cross_process_lock(lock_name, 3600), default=False)
         if not lock_acquired:
-            await message.answer("⚠️ **TASK ALREADY RUNNING**\nAnother worker is currently processing this command. Please wait.")
+            await message.answer("⚠️ **System Busy**\nAnother admin is running this command. Please wait.")
             return
 
-        status_msg = await message.answer("⚙️ **Background Task Started.**\nBot responsive rahega. Task progress monitor karein.")
+        status_msg = await message.answer("⚙️ **Background Task Started.**\nMonitor progress below. Use /cancel to stop.")
         
-        # Wrapped task to ensure lock release even on crash (BUG-7, BUG-11)
         async def task_wrapper():
             try:
-                # Add a watchdog timeout to the task itself (BUG-8)
-                await asyncio.wait_for(task_func(message, status_msg, *args, **kwargs), timeout=3500)
+                # Add watchdog timeout (1 hour max)
+                await asyncio.wait_for(task_func(message, status_msg, *args, **kwargs), timeout=3600)
+            except asyncio.CancelledError:
+                logger.warning(f"Task {task_func.__name__} cancelled by user.")
+                await safe_tg_call(status_msg.edit_text("🛑 **Task Forcefully Stopped** by Admin."))
+                raise # Re-raise to ensure cleanup
             except asyncio.TimeoutError:
-                logger.error(f"Task {task_func.__name__} timed out (Watchdog).")
-                await safe_tg_call(status_msg.edit_text("❌ **TASK TIMEOUT**: The task exceeded the safety window."))
+                await safe_tg_call(status_msg.edit_text("❌ **TASK TIMEOUT**: System limit reached."))
             except Exception as e:
                 logger.exception(f"Background task crash: {e}")
                 await safe_tg_call(status_msg.edit_text(f"❌ **TASK CRASHED**: {str(e)[:100]}"))
             finally:
+                # Cleanup Lock and Registry
                 await safe_db_call(db_primary.release_cross_process_lock(lock_name))
-                logger.info(f"Task {task_func.__name__} lock released.")
+                if user_id in ADMIN_ACTIVE_TASKS:
+                    del ADMIN_ACTIVE_TASKS[user_id]
+                logger.info(f"Task {task_func.__name__} finished/cancelled.")
 
-        asyncio.create_task(task_wrapper())
+        # Create Task and Register it
+        task = asyncio.create_task(task_wrapper())
+        ADMIN_ACTIVE_TASKS[user_id] = task
         
     except Exception as e:
         logger.error(f"Background launch error: {e}")
