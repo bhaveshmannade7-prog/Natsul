@@ -8,6 +8,7 @@ import io
 import signal
 import json
 import hashlib
+import random 
 import uuid # Naya: Unique IDs ke liye
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
@@ -63,7 +64,7 @@ from fastapi import FastAPI, BackgroundTasks, Request, HTTPException
 # --- Database Imports ---
 from database import Database
 from neondb import NeonDB
-
+ADMIN_ACTIVE_TASKS = {} 
 # ============ LOGGING SETUP ============
 logging.basicConfig(
     level=logging.INFO,
