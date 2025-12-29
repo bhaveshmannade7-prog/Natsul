@@ -2864,56 +2864,66 @@ async def backup_channel_command(message: types.Message, db_neon: NeonDB):
     if target_channel.upper() == "ID" or (not target_channel.startswith("@") and not target_channel.lstrip("-").isdigit()):
         await safe_tg_call(message.answer("❌ **Invalid Channel ID!**\nKripya sahi Channel ID (e.g., `-100...`) ya Username (`@name`) dalein."), semaphore=TELEGRAM_COPY_SEMAPHORE)
         return
-        # Wrapper function for background execution
-    # FIX: **kwargs add kiya taki db_primary argument milne par crash na ho
+    # Wrapper function for background execution
     async def backup_task(msg: types.Message, status_msg: types.Message, target: str, neon: NeonDB, **kwargs):
+        # 1. Check Cancellation (Start mein hi)
+        if asyncio.current_task().cancelled():
+            raise asyncio.CancelledError()
+
         unique_files = await safe_db_call(neon.get_unique_movies_for_backup(), default=[])
 
         if not unique_files:
             await safe_tg_call(status_msg.edit_text("❌ **Failed**: No files found.")); return
             
         total_files = len(unique_files)
-        await safe_tg_call(status_msg.edit_text(f"✅ **Found**: {total_files:,} files.\n🚀 Copying to `{target}`..."))
+        await safe_tg_call(status_msg.edit_text(f"✅ **Found**: {total_files:,} files.\n🚀 Starting Safe-Copy to `{target}`..."))
         
         copied_count, failed_count = 0, 0
-        tasks = []
+        last_update_time = datetime.now(timezone.utc)
         
-                # (Naya Batching Logic Code)
-        # Helper to chunk list
-        def chunk_list(data, size):
-            for i in range(0, len(data), size):
-                yield data[i:i + size]
+        # --- NEW LOGIC: Slow & Steady (No Batches) ---
+        for i, (msg_id, chat_id) in enumerate(unique_files):
+            
+            # 2. Check Cancellation (Har loop mein)
+            if asyncio.current_task().cancelled():
+                raise asyncio.CancelledError()
 
-        BATCH_SIZE = 20 # Ek baar me 20 files process karenge
-
-        for i, batch in enumerate(chunk_list(unique_files, BATCH_SIZE)):
-            batch_tasks = []
-            for msg_id, chat_id in batch:
-                # Task banayein par turant await na karein
-                task = safe_tg_call(
+            # 3. Copy Message (Single)
+            try:
+                res = await safe_tg_call(
                     bot.copy_message(chat_id=target, from_chat_id=chat_id, message_id=msg_id),
-                    timeout=TG_OP_TIMEOUT * 2, semaphore=TELEGRAM_COPY_SEMAPHORE
+                    semaphore=TELEGRAM_COPY_SEMAPHORE
                 )
-                batch_tasks.append(task)
-            
-            # Batch ko execute karein
-            results = await asyncio.gather(*batch_tasks)
-            
-            # Results count karein
-            for res in results:
                 if res: copied_count += 1
                 else: failed_count += 1
-            
-            # Progress Update
-            total_processed = (i + 1) * BATCH_SIZE
-            if total_processed > total_files: total_processed = total_files
-            
-            # Har batch ke baad thoda rest (FloodWait Prevention)
-            await asyncio.sleep(2.0)
+            except Exception as e:
+                logger.error(f"Backup copy fail: {e}")
+                failed_count += 1
 
-            try: 
-                if i % 2 == 0: # Har 2nd batch pe edit karein (API bachane ke liye)
-                    await safe_tg_call(status_msg.edit_text(f"🚀 **Backup Progress**\nCompleted: {total_processed:,} / {total_files:,}\n✅ {copied_count} | ❌ {failed_count}"))
+            # 4. Smart Delays (FloodWait Avoidance)
+            # Har message ke baad 1.5 se 2.5 second ka random gap
+            await asyncio.sleep(random.uniform(1.5, 2.5))
+            
+            # Har 50 messages ke baad lamba break (10 seconds)
+            if (i + 1) % 50 == 0:
+                await asyncio.sleep(10)
+
+            # 5. Progress Update (Har 20 message ya 10 second baad)
+            now = datetime.now(timezone.utc)
+            if (i + 1) % 20 == 0 or (now - last_update_time).total_seconds() > 10:
+                try: 
+                    await safe_tg_call(status_msg.edit_text(
+                        f"🚀 **Backup in Progress**\n"
+                        f"Target: `{target}`\n"
+                        f"Completed: {i + 1:,} / {total_files:,}\n"
+                        f"✅ Success: {copied_count}\n"
+                        f"❌ Failed: {failed_count}\n\n"
+                        f"ℹ️ Slow mode active to prevent ban."
+                    ))
+                    last_update_time = now
+                except TelegramBadRequest: pass
+
+        await safe_tg_call(status_msg.edit_text(f"🎉 **BACKUP FINISHED**\n\n**Total:** {total_files:,}\n**Success:** {copied_count}\n**Failed:** {failed_count}"))
             except TelegramBadRequest: pass
 
                 
