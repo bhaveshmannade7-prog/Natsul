@@ -2358,8 +2358,8 @@ async def search_switch_command(message: types.Message):
     await safe_tg_call(message.answer(dep_text), semaphore=TELEGRAM_COPY_SEMAPHORE)
     # --- NEW: Cancel Handler for FSM ---
 # Ye handler zaroori hai taaki agar Admin /addad command use karke 
-  @dp.message(Command("clearlocks"), AdminFilter())
-  async def clear_locks_command(message: types.Message, db_primary: Database):
+@dp.message(Command("clearlocks"), AdminFilter())
+async def clear_locks_command(message: types.Message, db_primary: Database):
     # Sabhi locks ko force release karein
     locks = ["task_lock_backup_task", "task_lock_sync_mongo_1_to_2_command", "global_webhook_set_lock"]
     for lock in locks:
