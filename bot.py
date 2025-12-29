@@ -2927,7 +2927,17 @@ async def backup_channel_command(message: types.Message, db_neon: NeonDB, db_pri
 
     # Launch in background with db_primary for locking
     await run_in_background(backup_task, message, target=target_channel, neon=db_neon, db_primary=db_primary)
-                    
+  @dp.message(Command("clearlocks"), AdminFilter())
+async def clear_locks_command(message: types.Message, db_primary: Database):
+    # Sabhi locks ko force release karein
+    locks = ["task_lock_backup_task", "task_lock_sync_mongo_1_to_2_command", "global_webhook_set_lock"]
+    for lock in locks:
+        await safe_db_call(db_primary.release_cross_process_lock(lock))
+    
+    # Global dictionary clear karein
+    ADMIN_ACTIVE_TASKS.clear()
+    
+    await message.answer("✅ **System Locks Cleared!**\nAb aap naye commands chala sakte hain.")
 
 @dp.message(Command("sync_mongo_1_to_neon"), AdminFilter())
 @handler_timeout(1800)
