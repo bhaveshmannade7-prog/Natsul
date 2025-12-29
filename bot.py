@@ -2851,19 +2851,18 @@ async def remove_library_duplicates_command(message: types.Message, status_msg: 
 
 @dp.message(Command("backup_channel"), AdminFilter())
 @handler_timeout(7200)
-async def backup_channel_command(message: types.Message, db_neon: NeonDB):
+async def backup_channel_command(message: types.Message, db_neon: NeonDB, db_primary: Database):
     # UI logic for identifying target
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await safe_tg_call(message.answer("⚠️ **Usage**: /backup_channel `Target_Channel_ID`\nExample: `/backup_channel -1001234567890`"), semaphore=TELEGRAM_COPY_SEMAPHORE); return
-    
+        await safe_tg_call(message.answer("⚠️ **Usage**: /backup_channel `ID_OR_USERNAME`"), semaphore=TELEGRAM_COPY_SEMAPHORE); return
     target_channel = args[1].strip()
-
-    # FIX: Valid ID Check
-    # Agar user ne galti se "ID" likh diya ya ID valid nahi hai
+    
+    # Validation
     if target_channel.upper() == "ID" or (not target_channel.startswith("@") and not target_channel.lstrip("-").isdigit()):
         await safe_tg_call(message.answer("❌ **Invalid Channel ID!**\nKripya sahi Channel ID (e.g., `-100...`) ya Username (`@name`) dalein."), semaphore=TELEGRAM_COPY_SEMAPHORE)
         return
+
     # Wrapper function for background execution
     async def backup_task(msg: types.Message, status_msg: types.Message, target: str, neon: NeonDB, **kwargs):
         # 1. Check Cancellation (Start mein hi)
@@ -2924,13 +2923,10 @@ async def backup_channel_command(message: types.Message, db_neon: NeonDB):
                 except TelegramBadRequest: pass
 
         await safe_tg_call(status_msg.edit_text(f"🎉 **BACKUP FINISHED**\n\n**Total:** {total_files:,}\n**Success:** {copied_count}\n**Failed:** {failed_count}"))
-            except TelegramBadRequest: pass
 
-                
-        await safe_tg_call(status_msg.edit_text(f"🎉 **BACKUP FINISHED**\n\n**Total:** {total_files:,}\n**Success:** {copied_count}\n**Failed:** {failed_count}"))
-
+    # Launch in background with db_primary for locking
     await run_in_background(backup_task, message, target=target_channel, neon=db_neon, db_primary=db_primary)
-
+                    
 
 @dp.message(Command("sync_mongo_1_to_neon"), AdminFilter())
 @handler_timeout(1800)
