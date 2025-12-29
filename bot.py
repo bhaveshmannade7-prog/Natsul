@@ -1262,14 +1262,35 @@ async def ensure_capacity_or_inform(
     return True
 
 # ============ USER COMMANDS AND HANDLERS ============
+# --- GLOBAL TASK REGISTRY ---
+# Admin ke active tasks ko store karne ke liye
+ADMIN_ACTIVE_TASKS: Dict[int, asyncio.Task] = {}
+
 @dp.message(Command("cancel"), StateFilter("*"))
 async def cancel_handler(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    canceled_any = False
+
+    # 1. FSM State Cancel
     current_state = await state.get_state()
-    if current_state is None:
-        await message.answer("ℹ️ **Nothing to cancel.** You are not in any active process.")
-        return
-    await state.clear()
-    await message.answer("🚫 **Process Cancelled.** You can now use normal commands.")
+    if current_state is not None:
+        await state.clear()
+        canceled_any = True
+    
+    # 2. Background Task Cancel (Universal Cancel)
+    if user_id in ADMIN_ACTIVE_TASKS:
+        task = ADMIN_ACTIVE_TASKS[user_id]
+        if not task.done():
+            task.cancel() # Task ko stop signal bhejo
+            canceled_any = True
+            logger.info(f"Admin {user_id} ne task cancel kiya.")
+        # Registry se remove hum done_callback me karenge, par safety ke liye yahan bhi try kar sakte hain
+        del ADMIN_ACTIVE_TASKS[user_id]
+
+    if canceled_any:
+        await message.answer("🚫 **Process Cancelled.**\nStopped active tasks and cleared states.")
+    else:
+        await message.answer("ℹ️ **Nothing to cancel.** No active tasks found.")
 
 @dp.message(CommandStart(), BannedFilter())
 async def banned_start_command_stub(message: types.Message):
