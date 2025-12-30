@@ -2044,14 +2044,16 @@ async def get_movie_callback(callback: types.CallbackQuery, bot: Bot, db_primary
         # 2 minutes = 120 seconds
         asyncio.create_task(schedule_auto_delete(bot, user.id, sent_msg_id, warning_msg_id, delay=120))
         
-        # UI Enhancement: Success message with WARNING
+        # UI Enhancement: Success message with DUAL LANGUAGE WARNING
         success_text = (
             f"🎉 **CONTENT DELIVERED**\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"✅ '<b>{movie['title']}</b>' has been sent.\n\n"
-            f"⚠️ **COPYRIGHT ALERT: AUTO-DELETE**\n"
-            f"To protect the channel, this file will **self-destruct in 2 minutes**.\n\n"
-            f"🔥 **FORWARD IT to your 'Saved Messages' NOW!**"
+            f"⚠️ **AUTO-DELETE WARNING / जरुरी सुचना**\n"
+            f"🇺🇸 This file will **self-destruct in 2 minutes** to protect the channel.\n"
+            f"🇮🇳 Channel safety ke liye ye file **2 minute me delete** ho jayegi.\n\n"
+            f"🔥 **FORWARD to 'Saved Messages' NOW!**\n"
+            f"🔥 **Delete hone se pehle ise Forward kar lein!**"
         )
         try:
             await safe_tg_call(callback.message.edit_text(success_text))
