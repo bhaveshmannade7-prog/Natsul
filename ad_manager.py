@@ -13,35 +13,37 @@ async def send_sponsor_ad(user_id: int, bot: Bot, db: Any, redis_cache: Any):
     """
     Sponsor message logic.
     Configured for: Very High Frequency (Aggressive Mode).
-    Logic: 5 Minute Cooldown + 90% Probability when cooldown is off.
+    Logic: 30 Seconds Cooldown + 90% Probability.
     """
     try:
-        # 1. Frequency Control (Flood limit check)
+        # 1. Frequency Control (Spam Prevention only)
+        # Humne lock time 5 min se ghata kar 30 seconds kar diya hai.
+        # Matlab "Lagatar" feel hoga, par bot spam nahi karega.
         if redis_cache and redis_cache.is_ready():
             ad_lock_key = f"ad_limit:{user_id}"
             
-            # Check lock (Agar user ne pichle 5 minute me ad dekha hai to skip)
+            # Check lock
             if await redis_cache.get(ad_lock_key):
                 return 
 
-        # 2. Randomness Logic (Har movie ke sath na mile, lekin aksar mile)
-        # 0.1 matlab sirf 10% chance hai ki Ad SKIP ho jayega.
-        # 90% chance hai ki Ad DIKHEGA.
+        # 2. Randomness Logic (Probability Check)
+        # OLD: 0.3 (30% Skip)
+        # NEW: 0.1 (10% Skip) -> 90% Chance Ad Dikhega.
         if random.random() < 0.1:
             return
 
         # 3. Get Random Ad from Database
         ad = await db.get_random_ad()
         if not ad:
-            return # Agar DB me koi ad nahi hai
+            return # Agar DB me koi ad nahi hai to ruk jao
 
-        # 4. Set Lock (Ad dikhane ja rahe hain, to ab 5 min ka lock laga do)
+        # 4. Set Lock (Next ad kab dikhega)
+        # OLD: ttl=300 (5 Minutes)
+        # NEW: ttl=30 (30 Seconds) -> User ko "Har baar" feel hoga.
         if redis_cache and redis_cache.is_ready():
-            await redis_cache.set(f"ad_limit:{user_id}", "active", ttl=300) # 300 seconds = 5 Minutes
+            await redis_cache.set(f"ad_limit:{user_id}", "active", ttl=30) 
 
-        # 5. Format Message (Better UI)
-        # HTML ParseMode use karenge taaki bold/formatting achi dikhe
-        # Borders add kiye hain taaki content se alag dikhe
+        # 5. Format Message (High Visibility UI)
         text = (
             f"📢 <b>SPONSORED ADVERTISEMENT</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -49,22 +51,20 @@ async def send_sponsor_ad(user_id: int, bot: Bot, db: Any, redis_cache: Any):
             f"━━━━━━━━━━━━━━━━━━━━━━"
         )
         
-        # Button Logic (Agar button text aur URL hai)
+        # Button Logic
         kb = None
         if ad.get('btn_text') and ad.get('btn_url'):
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                # Button par bhi thoda decoration
                 InlineKeyboardButton(text=f"✨ {ad['btn_text']} ↗️", url=ad['btn_url'])
             ]])
 
         # 6. Send Message
-        # disable_web_page_preview=True kiya hai taaki sirf button dikhe, link ka preview gandagi na kare
         await bot.send_message(user_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
         
         # Track View Analytics
         if hasattr(db, 'track_event'):
-            asyncio.create_task(db.track_event("ad_view", {"ad_id": ad.get("ad_id")}))
+            asyncio.create_task(db.track_event(user_id, "ad_view", ad_id=ad.get('ad_id')))
 
     except Exception as e:
-        # Silent fail taaki user flow break na ho
-        logger.warning(f"Ad delivery failed for user {user_id}: {e}")
+        # Silent fail taaki user ka experience kharab na ho
+        logger.error(f"Ad send failed for {user_id}: {e}")
