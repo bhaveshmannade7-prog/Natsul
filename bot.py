@@ -2121,10 +2121,21 @@ async def auto_index_handler(message: types.Message, db_primary: Database, db_fa
     if message.chat.id != LIBRARY_CHANNEL_ID or LIBRARY_CHANNEL_ID == 0: return
     if not (message.video or message.document): return
         
-    info = extract_movie_info(message.caption or "") 
+    info = extract_movie_info(message.caption or "")
+    
+    # Agar caption se info nahi mili, to Filename try karein
     if not info or not info.get("title"):
-        if message.caption: logger.warning(f"Auto-Index Skip (MsgID {message.message_id}): Caption parse nahi kar paya: '{message.caption[:50]}...'")
-        else: logger.warning(f"Auto-Index Skip (MsgID {message.message_id}): Koi caption nahi.")
+        file_obj = message.video or message.document
+        if file_obj and hasattr(file_obj, 'file_name') and file_obj.file_name:
+            parsed_meta = parse_filename(file_obj.file_name)
+            if parsed_meta.get("title"):
+                info = parsed_meta
+                # Year agar caption me nahi tha to filename se le liya
+                if not info.get("title"): info = None
+
+    if not info or not info.get("title"):
+        if message.caption: logger.warning(f"Auto-Index Skip (MsgID {message.message_id}): Caption/Filename parse nahi kar paya.")
+        else: logger.warning(f"Auto-Index Skip (MsgID {message.message_id}): Koi valid data nahi mila.")
         return
 
     file_data = message.video or message.document
