@@ -647,11 +647,11 @@ def overflow_message(active_users: int) -> str:
         f"✨ *Thank you for your patience.*"
     )
 
-# --- NEW: AUTO DELETE HELPER (UPDATED) ---
+# --- NEW: AUTO DELETE HELPER (UPDATED HINDI) ---
 async def schedule_auto_delete(bot: Bot, chat_id: int, file_message_id: int, warning_message_id: int, delay: int = 120):
     """
     Schedules deletion of File AND Warning Message.
-    After deletion, notifies user to search again.
+    After deletion, notifies user in Hinglish.
     Default Delay: 120 seconds (2 Minutes).
     """
     await asyncio.sleep(delay)
@@ -674,14 +674,14 @@ async def schedule_auto_delete(bot: Bot, chat_id: int, file_message_id: int, war
     except Exception:
         pass
 
-    # 3. Send "Deleted" Notification
+    # 3. Send "Deleted" Notification (HINGLISH)
     try:
         delete_notify_text = (
-            "🗑️ **Movie File Deleted**\n"
+            "🗑️ **Movie File Delete Ho Gayi**\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "⚠️ As per security protocol, the file has been removed.\n\n"
-            "💡 **Need it again?**\n"
-            "Simply search for the movie again in the bot."
+            "⚠️ Security reasons ki wajah se ye file delete kar di gayi hai.\n\n"
+            "💡 **Movie Wapas Chahiye?**\n"
+            "Bot me bas movie ka naam dobara search karein, mil jayegi."
         )
         await bot.send_message(chat_id, delete_notify_text)
     except Exception:
