@@ -12,8 +12,8 @@ logger = logging.getLogger("bot.ads")
 async def send_sponsor_ad(user_id: int, bot: Bot, db: Any, redis_cache: Any):
     """
     Sponsor message logic.
-    Configured for: High Frequency but Natural Feel.
-    Logic: 5 Minute Cooldown + 70% Probability when cooldown is off.
+    Configured for: Very High Frequency (Aggressive Mode).
+    Logic: 5 Minute Cooldown + 90% Probability when cooldown is off.
     """
     try:
         # 1. Frequency Control (Flood limit check)
@@ -25,9 +25,9 @@ async def send_sponsor_ad(user_id: int, bot: Bot, db: Any, redis_cache: Any):
                 return 
 
         # 2. Randomness Logic (Har movie ke sath na mile, lekin aksar mile)
-        # 0.3 matlab 30% chance hai ki Ad SKIP ho jayega.
-        # 70% chance hai ki Ad DIKHEGA.
-        if random.random() < 0.3:
+        # 0.1 matlab sirf 10% chance hai ki Ad SKIP ho jayega.
+        # 90% chance hai ki Ad DIKHEGA.
+        if random.random() < 0.1:
             return
 
         # 3. Get Random Ad from Database
@@ -63,9 +63,8 @@ async def send_sponsor_ad(user_id: int, bot: Bot, db: Any, redis_cache: Any):
         
         # Track View Analytics
         if hasattr(db, 'track_event'):
-            asyncio.create_task(db.track_event("ad_view", extra_id=ad.get('ad_id')))
-            
-        logger.info(f"Ad sent to user {user_id}")
+            asyncio.create_task(db.track_event("ad_view", {"ad_id": ad.get("ad_id")}))
 
     except Exception as e:
-        logger.warning(f"Ad delivery failed for {user_id}: {e}")
+        # Silent fail taaki user flow break na ho
+        logger.warning(f"Ad delivery failed for user {user_id}: {e}")
