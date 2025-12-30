@@ -2132,56 +2132,56 @@ async def migration_handler(message: types.Message, bot: Bot, db_primary: Databa
 @dp.channel_post()
 @handler_timeout(20)
 async def auto_index_handler(message: types.Message, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
-    # 1. Debug Logging: Sabse pehle print karo ki message aaya hai
-    logger.info(f"📥 CHANNEL POST DETECTED | Chat ID: {message.chat.id} | Type: {message.content_type}")
+    # 1. Debug Logging
+    # logger.info(f"📥 CHANNEL POST DETECTED | Chat ID: {message.chat.id} | Type: {message.content_type}")
 
-    # 2. ID Check with Logging (Silent death fix)
+    # 2. ID Check
     if message.chat.id != LIBRARY_CHANNEL_ID or LIBRARY_CHANNEL_ID == 0:
-        logger.warning(f"⚠️ Index Skip: Channel ID Mismatch. Expected: {LIBRARY_CHANNEL_ID}, Got: {message.chat.id}")
         return
 
     # 3. Media Check
     file_obj = message.video or message.document or message.audio
     if not file_obj:
-        logger.info(f"⚠️ Index Skip: Message contain no valid media (Video/Doc/Audio).")
         return
         
-    # 4. Smart Info Extraction (Caption + Filename Fallback)
+    # 4. Smart Info Extraction
     info = extract_movie_info(message.caption or "")
     
-    # Agar Caption fail hua, to Filename try karo
+    # Filename Fallback
     if not info or not info.get("title"):
-        # Video objects me kabhi-kabhi file_name attribute direct nahi milta, safe getattr use karein
         filename = getattr(file_obj, "file_name", None)
-        
-        # Agar filename abhi bhi None hai, to Video properties check karein
         if not filename and message.video:
-             # Fallback: Agar video hai par filename nahi, to hum "Untitled Video" maan sakte hain
-             # lekin koshish karein ki kuch mile. Telegram API limitation.
              filename = "Unknown Video"
 
         if filename:
             parsed_meta = parse_filename(filename)
             if parsed_meta.get("title") and parsed_meta["title"] != "Untitled":
                 info = parsed_meta
-                # Year check
                 if not info.get("title"): info = None
-            else:
-                logger.warning(f"⚠️ Filename Parsing Failed: '{filename}'")
 
     # 5. Final Valid Data Check
     if not info or not info.get("title"):
-        logger.warning(f"❌ Auto-Index FAILED: MsgID {message.message_id} - Title extract nahi kar paya (No Caption + Bad Filename).")
+        logger.warning(f"❌ Auto-Index FAILED: MsgID {message.message_id} - Title extract nahi kar paya.")
         return
 
     # 6. Data Preparation
     file_id = file_obj.file_id
     file_unique_id = file_obj.file_unique_id
-    imdb_id = info.get("imdb_id") or f"auto_{message.message_id}"
+    
+    # --- FIX START: DUPLICATE PREVENTION LOGIC ---
+    # Agar Info me IMDb ID hai to wo use karo, nahi to File Unique ID use karo.
+    # Message ID use mat karo, wo har baar change ho jata hai.
+    if info.get("imdb_id"):
+        imdb_id = info["imdb_id"]
+    else:
+        # "file_" prefix lagaya taaki conflict na ho
+        imdb_id = f"file_{file_unique_id}"
+    # --- FIX END ---
+
     title = info["title"]
     year = info.get("year")
     
-    log_prefix = f"✅ Auto-Index (Msg: {message.message_id}, Title: '{title}'):"
+    log_prefix = f"✅ Auto-Index (Title: '{title}'):"
     clean_title_val = clean_text_for_search(title)
     
     # 7. Database Operations
@@ -2193,7 +2193,14 @@ async def auto_index_handler(message: types.Message, db_primary: Database, db_fa
         res = await db1_task
         await db2_task
         await neon_task
-        if res is True: 
+        
+        # Result check: Agar "duplicate" ya "updated" hai to log karo
+        if res == "duplicate":
+            logger.info(f"{log_prefix} Skipped (Duplicate File).")
+        elif res == "updated":
+            logger.info(f"{log_prefix} Updated Existing Entry.")
+        elif res is True: 
+            # Sirf nayi movie ke liye cache update karo
             async with FUZZY_CACHE_LOCK:
                 if clean_title_val not in fuzzy_movie_cache:
                     movie_data = {
@@ -2205,10 +2212,9 @@ async def auto_index_handler(message: types.Message, db_primary: Database, db_fa
                     fuzzy_movie_cache[clean_title_val] = movie_data
                     if redis_cache.is_ready():
                          asyncio.create_task(redis_cache.set(f"movie_title_{clean_title_val}", json.dumps(movie_data), ttl=86400))
-            logger.info(f"{log_prefix} Processed & Cached.")
+            logger.info(f"{log_prefix} New Movie Added & Cached.")
     
     asyncio.create_task(run_tasks())
-    logger.info(f"{log_prefix} DB Sync initiated.")
 @dp.message(Command("stats"), AdminFilter())
 @handler_timeout(15)
 async def stats_command(message: types.Message, bot: Bot, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
