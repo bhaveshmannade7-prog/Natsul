@@ -272,17 +272,27 @@ class Database:
     # ==========================================
     # ANALYTICS TRACKING
     # ==========================================
-    async def track_event(self, event_type, extra_id=None):
+        # FIX: Updated to match ad_manager signature (user_id and ad_id support)
+    async def track_event(self, user_id: int, event_type: str, ad_id: str = None, **kwargs):
         """Non-blocking analytics tracking for Ads and Shortlinks."""
-        update_query = {"$inc": {"count": 1}}
-        if event_type.startswith("ad_") and extra_id:
-             await self.ads.update_one({"ad_id": extra_id}, {"$inc": {"views" if "view" in event_type else "clicks": 1}})
-        
-        await self.analytics.update_one(
-            {"type": event_type, "date": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
-            update_query,
-            upsert=True
-        )
+        try:
+            update_query = {"$inc": {"count": 1}}
+            
+            # Agar Ad view/click hai to Ads collection bhi update karein
+            if event_type.startswith("ad_") and ad_id:
+                 await self.ads.update_one(
+                     {"ad_id": ad_id}, 
+                     {"$inc": {"views" if "view" in event_type else "clicks": 1}}
+                 )
+            
+            # Global Analytics Update
+            await self.analytics.update_one(
+                {"type": event_type, "date": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
+                update_query,
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Analytics Error: {e}")
 
     # --- NAYE FUNCTIONS: Cross-Process Lock ---
     async def check_if_lock_exists(self, lock_name: str) -> bool:
