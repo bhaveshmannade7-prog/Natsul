@@ -647,13 +647,14 @@ def overflow_message(active_users: int) -> str:
         f"✨ *Thank you for your patience.*"
     )
 
-# --- NEW: AUTO DELETE HELPER (UPDATED HINDI) ---
+# --- NEW: AUTO DELETE HELPER (ENGLISH + HINGLISH) ---
 async def schedule_auto_delete(bot: Bot, chat_id: int, file_message_id: int, warning_message_id: int, delay: int = 120):
     """
     Schedules deletion of File AND Warning Message.
-    After deletion, notifies user in Hinglish.
+    After deletion, notifies user in both English and Hinglish.
     Default Delay: 120 seconds (2 Minutes).
     """
+    # Wait for delay
     await asyncio.sleep(delay)
     
     # 1. Delete Movie File
@@ -662,8 +663,8 @@ async def schedule_auto_delete(bot: Bot, chat_id: int, file_message_id: int, war
             bot.delete_message(chat_id=chat_id, message_id=file_message_id),
             semaphore=TELEGRAM_DELETE_SEMAPHORE
         )
-    except Exception:
-        pass # Agar user ne pehle hi delete kar diya to ignore karo
+    except Exception as e:
+        logger.warning(f"Auto-Delete File Fail (Chat {chat_id}): {e}")
 
     # 2. Delete Warning Message (Jo button wala msg tha)
     try:
@@ -674,20 +675,24 @@ async def schedule_auto_delete(bot: Bot, chat_id: int, file_message_id: int, war
     except Exception:
         pass
 
-    # 3. Send "Deleted" Notification (HINGLISH)
+    # 3. Send "Deleted" Notification (DUAL LANGUAGE)
+    # FIX: Message in both English & Hinglish for better UX
     try:
         delete_notify_text = (
-            "🗑️ **Movie File Delete Ho Gayi**\n"
+            "🗑️ **File Deleted**\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "⚠️ Security reasons ki wajah se ye file delete kar di gayi hai.\n\n"
-            "💡 **Movie Wapas Chahiye?**\n"
-            "Bot me bas movie ka naam dobara search karein, mil jayegi."
+            "🇺🇸 **System:** This file has been auto-deleted for security reasons.\n"
+            "🇮🇳 **Notice:** Security reasons ki wajah se ye file delete kar di gayi hai.\n\n"
+            "💡 **Solution:** Search for the movie name again to get a new link.\n"
+            "💡 **Upay:** Movie wapas pane ke liye bas uska naam dobara search karein."
         )
-        await bot.send_message(chat_id, delete_notify_text)
-    except Exception:
-        pass
+        await safe_tg_call(
+            bot.send_message(chat_id, delete_notify_text)
+        )
+        logger.info(f"✅ Deleted notification sent to {chat_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to send deleted notification to {chat_id}: {e}")
 # --- END NEW ---
-
 # ============ EVENT LOOP MONITOR (Unchanged) ============
 async def monitor_event_loop():
     loop = asyncio.get_running_loop()
