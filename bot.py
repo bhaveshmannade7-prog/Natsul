@@ -2053,10 +2053,23 @@ async def migration_handler(message: types.Message, bot: Bot, db_primary: Databa
         else: await safe_tg_call(message.answer(f"❌ **Invalid Source**: Forward from Library Channel (ID: `{LIBRARY_CHANNEL_ID}`) only."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
     if not (message.video or message.document): return
 
-    info = extract_movie_info(message.caption or "") 
+        # --- FIX START: Filename Fallback for Migration ---
+    info = extract_movie_info(message.caption or "")
+    
     if not info or not info.get("title"):
-        logger.warning(f"Migration Skip (Fwd MsgID {message.forward_from_message_id}): Caption parse nahi kar paya.")
+        # Fallback to filename
+        file_obj = message.video or message.document
+        if file_obj and hasattr(file_obj, 'file_name') and file_obj.file_name:
+            parsed_meta = parse_filename(file_obj.file_name)
+            if parsed_meta.get("title"):
+                info = parsed_meta
+
+    if not info or not info.get("title"):
+        logger.warning(f"Migration Skip (Fwd MsgID {message.forward_from_message_id}): Caption/Filename parse nahi kar paya.")
         await safe_tg_call(message.answer(f"❌ **Parse Error**: Caption missing/invalid for MsgID `{message.forward_from_message_id}`."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
+    # --- FIX END ---
+
+    file_data = message.video or message.document
 
     file_data = message.video or message.document
     file_id = file_data.file_id; file_unique_id = file_data.file_unique_id
