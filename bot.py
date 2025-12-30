@@ -647,17 +647,45 @@ def overflow_message(active_users: int) -> str:
         f"✨ *Thank you for your patience.*"
     )
 
-# --- NEW: AUTO DELETE HELPER ---
-async def schedule_auto_delete(bot: Bot, chat_id: int, message_id: int, delay: int = 420):
-    """Schedules message deletion after delay seconds (default 7 mins)."""
+# --- NEW: AUTO DELETE HELPER (UPDATED) ---
+async def schedule_auto_delete(bot: Bot, chat_id: int, file_message_id: int, warning_message_id: int, delay: int = 120):
+    """
+    Schedules deletion of File AND Warning Message.
+    After deletion, notifies user to search again.
+    Default Delay: 120 seconds (2 Minutes).
+    """
     await asyncio.sleep(delay)
+    
+    # 1. Delete Movie File
     try:
         await safe_tg_call(
-            bot.delete_message(chat_id=chat_id, message_id=message_id),
+            bot.delete_message(chat_id=chat_id, message_id=file_message_id),
             semaphore=TELEGRAM_DELETE_SEMAPHORE
         )
-    except Exception as e:
-        logger.warning(f"Auto-delete failed for {chat_id}/{message_id}: {e}")
+    except Exception:
+        pass # Agar user ne pehle hi delete kar diya to ignore karo
+
+    # 2. Delete Warning Message (Jo button wala msg tha)
+    try:
+        await safe_tg_call(
+            bot.delete_message(chat_id=chat_id, message_id=warning_message_id),
+            semaphore=TELEGRAM_DELETE_SEMAPHORE
+        )
+    except Exception:
+        pass
+
+    # 3. Send "Deleted" Notification
+    try:
+        delete_notify_text = (
+            "🗑️ **Movie File Deleted**\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ As per security protocol, the file has been removed.\n\n"
+            "💡 **Need it again?**\n"
+            "Simply search for the movie again in the bot."
+        )
+        await bot.send_message(chat_id, delete_notify_text)
+    except Exception:
+        pass
 # --- END NEW ---
 
 # ============ EVENT LOOP MONITOR (Unchanged) ============
