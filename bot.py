@@ -2516,17 +2516,45 @@ async def clear_ads_cmd(message: types.Message, db_primary: Database):
          await message.answer("ℹ️ **Database Clean.** No ads found to delete.")
 
 @dp.message(Command("setshort"), AdminFilter())
+@dp.message(Command("setshort"), AdminFilter())
 async def set_shortlink_cmd(message: types.Message, db_primary: Database):
-    args = message.text.split()
+    args = message.text.split(maxsplit=2)
+    
     if len(args) < 2:
-        return await message.answer("⚠️ **Usage**: /setshort `ON/OFF` `[URL]`")
-    
-    status = args[1].lower()
-    await db_primary.update_config("shortlink_status", status)
-    if len(args) > 2:
-        await db_primary.update_config("shortlink_api", args[2])
-    
-    await message.answer(f"✅ Monetization is now **{status.upper()}**.")
+        usage = (
+            "🛠 **SHORTLINK CONFIGURATION / शॉर्टलिंक सेटअप**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🔹 **Enable:** `/setshort ON` (चालू करें)\n"
+            "🔹 **Disable:** `/setshort OFF` (बंद करें)\n"
+            "🔹 **Set API:** `/setshort LINK <url>` (API लिंक सेट करें)\n\n"
+            "⚠️ **Note:** URL mein `{url}` hona zaroori hai."
+        )
+        return await message.answer(usage)
+
+    cmd_type = args[1].upper()
+
+    if cmd_type == "ON":
+        # Database mein Boolean True save karein
+        await db_primary.update_config("shortlink_enabled", True)
+        await message.answer("✅ **Monetization Enabled!**\nUsers will now see shortlinks once every 24h.")
+
+    elif cmd_type == "OFF":
+        # Database mein Boolean False save karein
+        await db_primary.update_config("shortlink_enabled", False)
+        await message.answer("❌ **Monetization Disabled!**\nDirect downloads are now active.")
+
+    elif cmd_type == "LINK":
+        if len(args) < 3:
+            return await message.answer("⚠️ **Error:** API URL missing! / यूआरएल गायब है।")
+        
+        new_api = args[2].strip()
+        if "{url}" not in new_api:
+            return await message.answer("❌ **Invalid API:** `{url}` placeholder is missing!")
+        
+        await db_primary.update_config("shortlink_api", new_api)
+        await message.answer(f"🚀 **Shortlink API Updated!**\nURL: `{new_api}`")
+    else:
+        await message.answer("❌ **Invalid Option!** Use `ON`, `OFF`, or `LINK`.")
 
 # ==========================================
 # PROBLEM FIX: SYNC COMMAND WRAPPERS
