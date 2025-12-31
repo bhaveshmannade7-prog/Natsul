@@ -1945,39 +1945,41 @@ async def get_movie_callback(callback: types.CallbackQuery, bot: Bot, db_primary
     imdb_id = callback.data.split("_", 1)[1]
     
     # --- FIXED SHORTLINK MONETIZATION CHECK ---
-    # Database se Boolean check karein aur API check karein
+    # --- FIXED SHORTLINK WITH 24H COOLDOWN & BILINGUAL TEXT ---
     shortlink_enabled = await db_primary.get_config("shortlink_enabled", False)
     shortlink_api = await db_primary.get_config("shortlink_api", None)
+    
+    # Check if user already has a 24H pass in Redis
+    has_pass = False
+    if redis_cache.is_ready():
+        has_pass = await redis_cache.get(f"sl_pass:{user.id}")
 
-    if shortlink_enabled and shortlink_api and user.id != ADMIN_USER_ID:
-        # 1. Create Token
+    # Agar system ON hai aur user ke paas pass NAHI hai
+    if shortlink_enabled and shortlink_api and not has_pass and user.id != ADMIN_USER_ID:
+        # Create unique token
         token = await db_primary.create_unlock_token(user.id, imdb_id)
-        # 2. Build Redirect URL
         bot_user = (await bot.get_me()).username
         unlock_url = f"https://t.me/{bot_user}?start=unlock_{token}"
-        # 3. Monetize (Using the existing helper function)
+        
+        # Shorten link
         monetized_link = await get_shortened_link(unlock_url, db_primary)
         
         unlock_kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔓 UNLOCK DOWNLOAD", url=monetized_link)
+            InlineKeyboardButton(text="🔓 UNLOCK ALL FILES (24H)", url=monetized_link)
         ]])
         
-                # --- DUAL LANGUAGE DOWNLOAD LOCKED MESSAGE ---
-        bilingual_text = (
+        bilingual_locked_text = (
             "🔐 **DOWNLOAD LOCKED / डाउनलोड लॉक है**\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🇺🇸 To keep this service free, please complete one shortlink to unlock the file.\n"
-            "🇮🇳 इस सर्विस को फ्री रखने के लिए, कृपया फाइल अनलॉक करने के लिए एक शॉर्टलिंक पूरा करें।\n\n"
-            "1️⃣ **Tap 'Unlock' below** / नीचे 'Unlock' पर क्लिक करें\n"
-            "2️⃣ **Complete verification** / वेरिफिकेशन पूरा करें\n"
-            "3️⃣ **You will be redirected back** / आप वापस यहीं आ जायेंगे\n\n"
-            "✨ *Thank you for your support!*"
+            "🇺🇸 Complete **one** shortlink to unlock **unlimited downloads** for 24 hours!\n"
+            "🇮🇳 **24 घंटे** के लिए **अनलिमिटेड डाउनलोड** अनलॉक करने के लिए बस एक शॉर्टलिंक पूरा करें।\n\n"
+            "✅ **Benefits / फायदे:**\n"
+            "• No more links for 24 hours (24 घंटे तक कोई लिंक नहीं)\n"
+            "• Instant direct files (सीधी फाइलें मिलेंगी)\n\n"
+            "👇 **Tap 'Unlock' to start** / नीचे 'Unlock' पर क्लिक करें"
         )
         
-        await callback.message.edit_text(
-            text=bilingual_text,
-            reply_markup=unlock_kb
-        )
+        await callback.message.edit_text(text=bilingual_locked_text, reply_markup=unlock_kb)
         asyncio.create_task(db_primary.track_event("shortlink_attempt"))
         return
     # --- END SHORTLINK WRAPPER ---
