@@ -64,7 +64,6 @@ from fastapi import FastAPI, BackgroundTasks, Request, HTTPException
 # --- Database Imports ---
 from database import Database
 from neondb import NeonDB
-ADMIN_ACTIVE_TASKS = {} 
 # ============ LOGGING SETUP ============
 logging.basicConfig(
     level=logging.INFO,
@@ -897,108 +896,6 @@ def python_fuzzy_search(query: str, limit: int = 10, **kwargs) -> List[Dict]:
         # 4. Final Sort & Deduplicate
         candidates.sort(key=lambda x: x['score'], reverse=True)
         
-        unique_candidates = []
-        final_seen_imdb = set()
-        for c in candidates:
-            if c['imdb_id'] not in final_seen_imdb:
-                unique_candidates.append(c)
-                final_seen_imdb.add(c['imdb_id'])
-        
-        return unique_candidates[:limit]
-        
-    except Exception as e:
-        logger.error(f"python_fuzzy_search mein error: {e}", exc_info=True)
-        return []
-
-    try:
-        # 1. Clean inputs
-
-        q_fuzzy = clean_text_for_fuzzy(query) 
-        q_anchor = clean_text_for_search(query) 
-        
-        if not q_fuzzy or not q_anchor: return []
-        
-        # Tokenization (for Rule 1)
-        query_tokens = [t for t in q_anchor.split() if t]
-
-        candidates = []
-        seen_imdb = set()
-        
-        # --- 1. EXACT MATCH ANCHOR (Score 1001) ---
-        anchor_keys = [q_anchor]
-        if q_anchor.startswith('the '):
-             anchor_keys.append(q_anchor[4:]) 
-        else:
-             anchor_keys.append('the ' + q_anchor) 
-
-        for key in set(anchor_keys):
-            if key in fuzzy_movie_cache:
-                data = fuzzy_movie_cache[key]
-                if data['imdb_id'] not in seen_imdb:
-                     candidates.append({
-                        'imdb_id': data['imdb_id'],
-                        'title': data['title'],
-                        'year': data.get('year'),
-                        'score': 1001, # Highest Priority Score
-                        'match_type': 'exact_anchor'
-                     })
-                     seen_imdb.add(data['imdb_id'])
-                     logger.debug(f"🎯 Exact Anchor Match: {data['title']}")
-        # --- END 1 ---
-
-
-        # 2. RAPIDFUZZ BROAD FETCH (Limit 1000 - CPU-bound work)
-        all_titles = list(fuzzy_movie_cache.keys())
-        
-                # Process.extract ko WRatio se chalao
-        # FIX: Optimized Balance (Accuracy vs CPU) for AWS EC2
-        pre_filtered = process.extract(
-            q_fuzzy, 
-            all_titles, 
-            limit=800,  # Wapas badhaya (Accuracy ke liye)
-            scorer=fuzz.WRatio, 
-            score_cutoff=40 # Thoda loose kiya taaki 'Kantra' jaisi typos pakad sake
-        )
-        
-        # 3. INTENT ENGINE V6 RE-RANKING
-        for clean_title_key, fuzz_score, _ in pre_filtered:
-            data = fuzzy_movie_cache.get(clean_title_key)
-            if not data or data['imdb_id'] in seen_imdb: continue
-            
-            t_clean_key = clean_title_key 
-            
-            # Smart Score Calculation (V6 Logic)
-            intent_score = get_smart_match_score(query_tokens, t_clean_key)
-            
-            final_score = 0
-            match_type = "fuzzy"
-            
-            if fuzz_score >= 95:
-                # High Fuzzy (near perfect) ko 900+ score do
-                final_score = 900 + intent_score
-                match_type = "high_fuzzy"
-            elif intent_score > 50: 
-                # Intent matches (word presence/sequence) ko 500-750 score do
-                final_score = 500 + intent_score 
-                match_type = "intent"
-            else:
-                # Default WRatio score
-                final_score = fuzz_score
-
-            candidates.append({
-                'imdb_id': data['imdb_id'],
-                'title': data['title'],
-                'year': data.get('year'),
-                'score': final_score,
-                'match_type': match_type
-            })
-            seen_imdb.add(data['imdb_id'])
-
-
-        # 4. Final Sort & Deduplicate
-        candidates.sort(key=lambda x: x['score'], reverse=True)
-        
-        # Final deduplication (though done above, this ensures safety)
         unique_candidates = []
         final_seen_imdb = set()
         for c in candidates:
