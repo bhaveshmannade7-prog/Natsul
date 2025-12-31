@@ -51,7 +51,7 @@ def remove_junk_from_title(title: str) -> str:
     return cleaned
 
 class Database:
-    def __init__(self, database_url: str):
+    def _init_(self, database_url: str):
         self.database_url = database_url
         self.client = None
         self.db = None
@@ -196,11 +196,13 @@ class Database:
     # ==========================================
     # NEW FEATURE A: ADS MANAGEMENT
     # ==========================================
-async def get_event_count(self, event_name: str) -> int:
+    async def get_event_count(self, event_name: str) -> int:
         """
         Database se kisi specific event (jaise shortlink_success) ka count nikalta hai.
         """
-        doc = await self.db.events.find_one({"event": event_name})
+        if not self.db: return 0
+        # Events counts are stored in the analytics collection
+        doc = await self.db.analytics.find_one({"type": event_name})
         if doc:
             return doc.get("count", 0)
         return 0
@@ -216,7 +218,8 @@ async def get_event_count(self, event_name: str) -> int:
             "btn_text": btn_text,
             "btn_url": btn_url,
             "status": True,
-            "views": 0
+            "views": 0,
+            "clicks": 0
         }
         await self.ads.insert_one(ad_doc)
         return ad_id
@@ -283,7 +286,7 @@ async def get_event_count(self, event_name: str) -> int:
     # ==========================================
     # ANALYTICS TRACKING
     # ==========================================
-        # FIX: Updated to match ad_manager signature (user_id and ad_id support)
+    # FIX: Updated to match ad_manager signature (user_id and ad_id support)
     async def track_event(self, user_id: int, event_type: str, ad_id: str = None, **kwargs):
         """Non-blocking analytics tracking for Ads and Shortlinks."""
         try:
@@ -369,14 +372,14 @@ async def get_event_count(self, event_name: str) -> int:
     
     async def _handle_db_error(self, e: Exception) -> bool:
         if isinstance(e, (ConnectionFailure, asyncio.TimeoutError)):
-             logger.error(f"DB connection error detected: {type(e).__name__}. Will try to reconnect।", exc_info=False)
+             logger.error(f"DB connection error detected: {type(e)._name_}. Will try to reconnect।", exc_info=False)
              self.client = None
              return True
         elif isinstance(e, DuplicateKeyError):
              logger.warning(f"DB DuplicateKeyError: {e.details}")
              return False
         else:
-             logger.error(f"Unhandled DB Exception: {type(e).__name__}: {e}", exc_info=True)
+             logger.error(f"Unhandled DB Exception: {type(e)._name_}: {e}", exc_info=True)
              return False
 
     # --- EXACT SEARCH LOGIC (Mongo) ---
@@ -946,7 +949,7 @@ async def get_event_count(self, event_name: str) -> int:
         """Checks if clean_title exists in Mongo।"""
         if not await self.is_ready(): return None
         try:
-            # Find one document that *has* a clean_title
+            # Find one document that has a clean_title
             movie = await self.movies.find_one(
                 {"clean_title": {"$exists": True, "$ne": ""}},
                 {"title": 1, "clean_title": 1}
@@ -954,7 +957,7 @@ async def get_event_count(self, event_name: str) -> int:
             if movie:
                 return {"title": movie.get("title"), "clean_title": movie.get("clean_title")}
             
-            # If none found, find one that *doesn't*
+            # If none found, find one that doesn't
             movie_bad = await self.movies.find_one(
                 {"$or": [{"clean_title": {"$exists": False}}, {"clean_title": ""}]},
                 {"title": 1}
