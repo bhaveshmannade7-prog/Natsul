@@ -204,18 +204,21 @@ async def get_event_count(self, event_name: str) -> int:
         if doc:
             return doc.get("count", 0)
         return 0
+
     async def add_ad(self, text, btn_text=None, btn_url=None):
-        """Saves a new sponsor ad in the database."""
+        """
+        Sponsor ads add karne ke liye function.
+        """
         ad_id = str(uuid.uuid4())[:8]
-        await self.ads.insert_one({
+        ad_doc = {
             "ad_id": ad_id,
             "text": text,
             "btn_text": btn_text,
             "btn_url": btn_url,
             "status": True,
-            "views": 0,
-            "clicks": 0
-        })
+            "views": 0
+        }
+        await self.ads.insert_one(ad_doc)
         return ad_id
 
     async def get_random_ad(self):
