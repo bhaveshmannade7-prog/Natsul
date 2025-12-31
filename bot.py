@@ -1361,7 +1361,7 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
     if len(args) > 1 and args[1].startswith("unlock_"):
         token = args[1].split("_")[1]
         token_doc = await db_primary.verify_unlock_token(token, user_id)
-                if token_doc:
+    if token_doc:
             # --- BILINGUAL SUCCESS MESSAGE ---
             success_msg = (
                 "✅ **DOWNLOAD UNLOCKED / अनलॉक हो गया!**\n"
