@@ -1949,44 +1949,7 @@ async def get_movie_callback(callback: types.CallbackQuery, bot: Bot, db_primary
     imdb_id = callback.data.split("_", 1)[1]
     
     # --- FIXED SHORTLINK MONETIZATION CHECK ---
-    # --- FIXED SHORTLINK WITH 24H COOLDOWN & BILINGUAL TEXT ---
-    shortlink_enabled = await db_primary.get_config("shortlink_enabled", False)
-    shortlink_api = await db_primary.get_config("shortlink_api", None)
-    
-    # Check if user already has a 24H pass in Redis
-    has_pass = False
-    if redis_cache.is_ready():
-        has_pass = await redis_cache.get(f"sl_pass:{user.id}")
-
-    # Agar system ON hai aur user ke paas pass NAHI hai
-    if shortlink_enabled and shortlink_api and not has_pass and user.id != ADMIN_USER_ID:
-        # Create unique token
-        token = await db_primary.create_unlock_token(user.id, imdb_id)
-        bot_user = (await bot.get_me()).username
-        unlock_url = f"https://t.me/{bot_user}?start=unlock_{token}"
-        
-        # Shorten link
-        monetized_link = await get_shortened_link(unlock_url, db_primary)
-        
-        unlock_kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔓 UNLOCK ALL FILES (24H)", url=monetized_link)
-        ]])
-        
-        bilingual_locked_text = (
-            "🔐 **DOWNLOAD LOCKED / डाउनलोड लॉक है**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "🇺🇸 Complete **one** shortlink to unlock **unlimited downloads** for 24 hours!\n"
-            "🇮🇳 **24 घंटे** के लिए **अनलिमिटेड डाउनलोड** अनलॉक करने के लिए बस एक शॉर्टलिंक पूरा करें।\n\n"
-            "✅ **Benefits / फायदे:**\n"
-            "• No more links for 24 hours (24 घंटे तक कोई लिंक नहीं)\n"
-            "• Instant direct files (सीधी फाइलें मिलेंगी)\n\n"
-            "👇 **Tap 'Unlock' to start** / नीचे 'Unlock' पर क्लिक करें"
-        )
-        
-        await callback.message.edit_text(text=bilingual_locked_text, reply_markup=unlock_kb)
-        asyncio.create_task(db_primary.track_event("shortlink_attempt"))
-        return
-    # --- END SHORTLINK WRAPPER ---
+get_movie_callback
         # 1. Create Token
         token = await db_primary.create_unlock_token(user.id, imdb_id)
         # 2. Build Redirect URL
@@ -2011,7 +1974,6 @@ async def get_movie_callback(callback: types.CallbackQuery, bot: Bot, db_primary
         asyncio.create_task(db_primary.track_event("shortlink_attempt"))
         return
     # --- END SHORTLINK WRAPPER ---
-
     # get_movie_by_imdb is an async method in database.py
     movie = await safe_db_call(db_primary.get_movie_by_imdb(imdb_id), timeout=DB_OP_TIMEOUT)
     if not movie:
