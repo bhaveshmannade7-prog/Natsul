@@ -2273,131 +2273,128 @@ async def auto_index_handler(message: types.Message, db_primary: Database, db_fa
     
     asyncio.create_task(run_tasks())
 @dp.message(Command("stats"), AdminFilter())
-@handler_timeout(15)
-async def stats_command(message: types.Message, bot: Bot, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
-    # UI Enhancement: Custom working message
-    msg = await safe_tg_call(message.answer("📊 **Connecting to Dashboard...**"), semaphore=TELEGRAM_COPY_SEMAPHORE)
-    if not msg: return
-
-    # All check methods are async methods in database.py/neondb.py
-    user_count_task = safe_db_call(db_primary.get_user_count(), default=-1)
-    mongo_1_count_task = safe_db_call(db_primary.get_movie_count(), default=-1)
-    mongo_2_count_task = safe_db_call(db_fallback.get_movie_count(), default=-1)
-    neon_count_task = safe_db_call(db_neon.get_movie_count(), default=-1)
+@handler_timeout(20)
+# --- NEW: Centralized Dashboard Generator (Prevents Code Duplication) ---
+async def generate_admin_dashboard(db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
+    """
+    Generates the text and markup for the admin dashboard.
+    Fetches: User counts, Movie counts, System Health, Monetization Status, Ads Stats.
+    """
+    # 1. Database Health & Counts
+    user_count_task = safe_db_call(db_primary.get_user_count(), default=0)
+    mongo_1_count_task = safe_db_call(db_primary.get_movie_count(), default=0)
+    mongo_2_count_task = safe_db_call(db_fallback.get_movie_count(), default=0)
+    neon_count_task = safe_db_call(db_neon.get_movie_count(), default=0)
     concurrent_users_task = safe_db_call(db_primary.get_concurrent_user_count(ACTIVE_WINDOW_MINUTES), default=0)
     
+    # 2. Connection Checks
     mongo_1_ready_task = safe_db_call(db_primary.is_ready(), default=False)
     mongo_2_ready_task = safe_db_call(db_fallback.is_ready(), default=False)
     neon_ready_task = safe_db_call(db_neon.is_ready(), default=False)
     
-    redis_ready = redis_cache.is_ready()
+    # 3. Monetization & Ads Data (NEW ADDITION)
+    shortlink_status_task = safe_db_call(db_primary.get_config("shortlink_enabled", False), default=False)
+    shortlink_api_task = safe_db_call(db_primary.get_config("shortlink_api", "Not Set"), default="Not Set")
+    # Assuming 'ads' collection exists as used in /listads
+    active_ads_task = safe_db_call(db_primary.ads.count_documents({}), default=0)
 
-    user_count, mongo_1_count, mongo_2_count, neon_count, concurrent_users, mongo_1_ready, mongo_2_ready, neon_ready = await asyncio.gather(
-        user_count_task, mongo_1_count_task, mongo_2_count_task, neon_count_task, concurrent_users_task, mongo_1_ready_task, mongo_2_ready_task, neon_ready_task
+    # 4. Gather All Data concurrently
+    (
+        user_count, m1_count, m2_count, neon_count, active_users,
+        m1_ok, m2_ok, neon_ok,
+        sl_enabled, sl_api, ads_count
+    ) = await asyncio.gather(
+        user_count_task, mongo_1_count_task, mongo_2_count_task, neon_count_task, concurrent_users_task,
+        mongo_1_ready_task, mongo_2_ready_task, neon_ready_task,
+        shortlink_status_task, shortlink_api_task, active_ads_task
+    )
+
+    redis_ok = redis_cache.is_ready()
+
+    # 5. Icons & Formatting
+    def status_icon(is_ok): return "🟢 Online" if is_ok else "🔴 Offline"
+    def cache_icon(is_ok): return "🟢 Active" if is_ok else "🟠 Degraded"
+    
+    # Search Engine Logic Status
+    search_status = "⚡ Hybrid (Smart Sequence)"
+    if not m1_ok: search_status = "⚠️ Degraded (Primary DB Down)"
+    if len(fuzzy_movie_cache) == 0: search_status = "⚠️ Cache Empty (Run /reload...)"
+
+    # Shortlink Domain Extraction
+    sl_domain = "N/A"
+    if sl_api and "http" in sl_api:
+        try:
+            sl_domain = sl_api.split("/")[2]
+        except:
+            sl_domain = "Custom API"
+
+    monetization_icon = "🟢 ON" if sl_enabled else "🔴 OFF"
+
+    # 6. Final Dashboard Text
+    dashboard_text = (
+        f"🛡️ *COMMANDER DASHBOARD V2*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"*💰 MONETIZATION & ADS*\n"
+        f"• *Shortlink System:* {monetization_icon}\n"
+        f"• *Provider:* {sl_domain}\n"
+        f"• *Active Campaigns (Ads):* {ads_count}\n\n"
+
+        f"*🖥️ INFRASTRUCTURE*\n"
+        f"• *Primary Node (M1):* {status_icon(m1_ok)} | 📂 {m1_count:,}\n"
+        f"• *Fallback Node (M2):* {status_icon(m2_ok)} | 📂 {m2_count:,}\n"
+        f"• *Neon Backup:* {status_icon(neon_ok)} | 📂 {neon_count:,}\n"
+        f"• *Redis Cache:* {cache_icon(redis_ok)}\n\n"
+        
+        f"*🚦 TRAFFIC & USAGE*\n"
+        f"• *Total Users:* {user_count:,}\n"
+        f"• *Active Now (5m):* {active_users:,} / {CURRENT_CONC_LIMIT}\n"
+        f"• *Queue Load:* {priority_queue._queue.qsize()} tasks\n"
+        f"• *Search Engine:* {search_status}\n"
+        f"• *Memory Cache:* {len(fuzzy_movie_cache):,} titles\n"
+        f"• *Uptime:* {get_uptime()}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━"
     )
     
-    # UI Enhancement: Status Indicators
-    def node_status_icon(is_ok): 
-        return "🟢 Online" if is_ok else "🔴 Offline"
-
-    def cache_status_icon(is_ok): 
-        return "🟢 Active" if is_ok else "🟠 Degraded"
-
-    def count_str(c): return f"{c:,}" if c >= 0 else "N/A"
-
-    search_status = f"⚡ Hybrid (Smart Sequence)"
-    if not mongo_1_ready: search_status = "🟠 Degraded (M1 Down)"
-    if len(fuzzy_movie_cache) == 0: search_status = "🟠 Degraded (No Cache)"
+    # Refresh Button
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Refresh Stats", callback_data="admin_stats_cmd")],
+        [InlineKeyboardButton(text="🛠 Open Command Hub", callback_data="admin_panel_open")]
+    ])
     
-    # UI Enhancement: Premium Dashboard
-    stats_text = (
-        f"👑 **ADMIN DASHBOARD** 👑\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"**🖥️ SERVER NODES**\n"
-        f"• Node 1 (Mongo Primary): {node_status_icon(mongo_1_ready)}\n"
-        f"• Node 2 (Mongo Fallback): {node_status_icon(mongo_2_ready)}\n"
-        f"• Node 3 (Neon Backup): {node_status_icon(neon_ready)}\n"
-        f"• Node 4 (Redis Cache): {cache_status_icon(redis_ready)}\n\n"
-        
-        f"**📊 LIVE METRICS**\n"
-        f"• **Active Users:** {concurrent_users:,} / {CURRENT_CONC_LIMIT}\n"
-        f"• **Server Uptime:** {get_uptime()}\n"
-        f"• **Queue Load:** {priority_queue._queue.qsize()} tasks\n"
-        f"• **Search Engine:** {search_status}\n"
-        f"• **Fuzzy Cache:** {len(fuzzy_movie_cache):,} titles\n\n"
-        
-        f"**📂 DATA VOLUME**\n"
-        f"• **Total Users:** {count_str(user_count)}\n"
-        f"• **M1 Movies:** {count_str(mongo_1_count)}\n"
-        f"• **M2 Movies:** {count_str(mongo_2_count)}\n"
-        f"• **Neon Vectors:** {count_str(neon_count)}\n"
-        f"━━━━━━━━━━━━━━━━━━━━"
-    )
-    
-    # UI Enhancement: Link to Command Hub
-    panel_btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛠 Open Command Hub", callback_data="admin_panel_open")]])
-    await safe_tg_call(msg.edit_text(stats_text, reply_markup=panel_btn))
+    return dashboard_text, keyboard
+async def stats_command(message: types.Message, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
+    # UI: Working state
+    loading_msg = await safe_tg_call(message.answer("📊 *Analysing System Metrics...*"), semaphore=TELEGRAM_COPY_SEMAPHORE)
+    if not loading_msg: return
+
+    try:
+        # Generate Dashboard using the central function
+        text, reply_markup = await generate_admin_dashboard(db_primary, db_fallback, db_neon, redis_cache)
+        await safe_tg_call(loading_msg.edit_text(text, reply_markup=reply_markup))
+    except Exception as e:
+        logger.error(f"Stats generation failed: {e}")
+        await safe_tg_call(loading_msg.edit_text(f"❌ *Stats Error*: {e}"))
 
 # --- NEW: Callback Handler for Admin Stats Button ---
 @dp.callback_query(F.data == "admin_stats_cmd", AdminFilter())
-@handler_timeout(15)
-async def admin_stats_callback(callback: types.CallbackQuery, bot: Bot, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
-    await safe_tg_call(callback.answer("Accessing Dashboard..."))
+@handler_timeout(20)
+async def admin_stats_callback(callback: types.CallbackQuery, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
+    # Quietly acknowledge the click
+    await safe_tg_call(callback.answer("Refreshing Dashboard... 🔄"))
     
-    # Re-using stats generation logic here for the callback
-    # We edit the message instead of sending a new one
-    
-    # All check methods are async methods in database.py/neondb.py
-    user_count_task = safe_db_call(db_primary.get_user_count(), default=-1)
-    mongo_1_count_task = safe_db_call(db_primary.get_movie_count(), default=-1)
-    mongo_2_count_task = safe_db_call(db_fallback.get_movie_count(), default=-1)
-    neon_count_task = safe_db_call(db_neon.get_movie_count(), default=-1)
-    concurrent_users_task = safe_db_call(db_primary.get_concurrent_user_count(ACTIVE_WINDOW_MINUTES), default=0)
-    
-    mongo_1_ready_task = safe_db_call(db_primary.is_ready(), default=False)
-    mongo_2_ready_task = safe_db_call(db_fallback.is_ready(), default=False)
-    neon_ready_task = safe_db_call(db_neon.is_ready(), default=False)
-    
-    redis_ready = redis_cache.is_ready()
-    
-    user_count, mongo_1_count, mongo_2_count, neon_count, concurrent_users, mongo_1_ready, mongo_2_ready, neon_ready = await asyncio.gather(
-        user_count_task, mongo_1_count_task, mongo_2_count_task, neon_count_task, concurrent_users_task, mongo_1_ready_task, mongo_2_ready_task, neon_ready_task
-    )
-    
-    def node_status_icon(is_ok): return "🟢 Online" if is_ok else "🔴 Offline"
-    def cache_status_icon(is_ok): return "🟢 Active" if is_ok else "🟠 Degraded"
-    def count_str(c): return f"{c:,}" if c >= 0 else "N/A"
-
-    search_status = f"⚡ Hybrid (Smart Sequence)"
-    if not mongo_1_ready: search_status = "🟠 Degraded (M1 Down)"
-    if len(fuzzy_movie_cache) == 0: search_status = "🟠 Degraded (No Cache)"
-    
-    stats_text = (
-        f"👑 **ADMIN DASHBOARD** 👑\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"**🖥️ SERVER NODES**\n"
-        f"• Node 1 (Mongo Primary): {node_status_icon(mongo_1_ready)}\n"
-        f"• Node 2 (Mongo Fallback): {node_status_icon(mongo_2_ready)}\n"
-        f"• Node 3 (Neon Backup): {node_status_icon(neon_ready)}\n"
-        f"• Node 4 (Redis Cache): {cache_status_icon(redis_ready)}\n\n"
+    try:
+        # Reuse the SAME function (Centralized Dashboard Logic)
+        text, reply_markup = await generate_admin_dashboard(db_primary, db_fallback, db_neon, redis_cache)
         
-        f"**📊 LIVE METRICS**\n"
-        f"• **Active Users:** {concurrent_users:,} / {CURRENT_CONC_LIMIT}\n"
-        f"• **Server Uptime:** {get_uptime()}\n"
-        f"• **Queue Load:** {priority_queue._queue.qsize()} tasks\n"
-        f"• **Search Engine:** {search_status}\n"
-        f"• **Fuzzy Cache:** {len(fuzzy_movie_cache):,} titles\n\n"
-        
-        f"**📂 DATA VOLUME**\n"
-        f"• **Total Users:** {count_str(user_count)}\n"
-        f"• **M1 Movies:** {count_str(mongo_1_count)}\n"
-        f"• **M2 Movies:** {count_str(mongo_2_count)}\n"
-        f"• **Neon Vectors:** {count_str(neon_count)}\n"
-        f"━━━━━━━━━━━━━━━━━━━━"
-    )
-    
-    panel_btn = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛠 Open Command Hub", callback_data="admin_panel_open")]])
-    await safe_tg_call(callback.message.edit_text(stats_text, reply_markup=panel_btn))
+        # Only edit if content changed to avoid Telegram errors
+        if callback.message.text != text:
+            await safe_tg_call(callback.message.edit_text(text, reply_markup=reply_markup))
+        else:
+            await safe_tg_call(callback.answer("✅ Already up to date!"))
+            
+    except Exception as e:
+        logger.error(f"Stats callback failed: {e}")
+        await safe_tg_call(callback.answer("❌ Stats Error", show_alert=True))
 # --- END NEW ---
 
 # UI Enhancement: DEDICATED ADMIN PANEL COMMAND HUB
