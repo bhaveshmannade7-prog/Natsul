@@ -196,11 +196,14 @@ class Database:
     # ==========================================
     # NEW FEATURE A: ADS MANAGEMENT
     # ==========================================
-    async def get_event_count(self, event_name: str) -> int:
-    # Aapki events collection ka naam 'events' hona chahiye
-           doc = await self.db.events.find_one({"event": event_name})
-    return doc.get("count", 0) if doc else 0
-
+async def get_event_count(self, event_name: str) -> int:
+        """
+        Database se kisi specific event (jaise shortlink_success) ka count nikalta hai.
+        """
+        doc = await self.db.events.find_one({"event": event_name})
+        if doc:
+            return doc.get("count", 0)
+        return 0
     async def add_ad(self, text, btn_text=None, btn_url=None):
         """Saves a new sponsor ad in the database."""
         ad_id = str(uuid.uuid4())[:8]
