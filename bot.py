@@ -1962,13 +1962,20 @@ async def get_movie_callback(callback: types.CallbackQuery, bot: Bot, db_primary
             InlineKeyboardButton(text="🔓 UNLOCK DOWNLOAD", url=monetized_link)
         ]])
         
+                # --- DUAL LANGUAGE DOWNLOAD LOCKED MESSAGE ---
+        bilingual_text = (
+            "🔐 **DOWNLOAD LOCKED / डाउनलोड लॉक है**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🇺🇸 To keep this service free, please complete one shortlink to unlock the file.\n"
+            "🇮🇳 इस सर्विस को फ्री रखने के लिए, कृपया फाइल अनलॉक करने के लिए एक शॉर्टलिंक पूरा करें।\n\n"
+            "1️⃣ **Tap 'Unlock' below** / नीचे 'Unlock' पर क्लिक करें\n"
+            "2️⃣ **Complete verification** / वेरिफिकेशन पूरा करें\n"
+            "3️⃣ **You will be redirected back** / आप वापस यहीं आ जायेंगे\n\n"
+            "✨ *Thank you for your support!*"
+        )
+        
         await callback.message.edit_text(
-            "🔐 **DOWNLOAD LOCKED**\n"
-            "━━━━━━━━━━━━━━━━━━\n"
-            "To keep this service free, please complete one shortlink to unlock the file.\n\n"
-            "1️⃣ Tap 'Unlock' below.\n"
-            "2️⃣ Complete verification.\n"
-            "3️⃣ You will be redirected back.",
+            text=bilingual_text,
             reply_markup=unlock_kb
         )
         asyncio.create_task(db_primary.track_event("shortlink_attempt"))
