@@ -225,16 +225,17 @@ async def run_in_background(task_func, message: types.Message, *args, **kwargs):
 
 # ============ NEW: SHORTLINK REDIRECT LOGIC ============
 async def get_shortened_link(long_url, db: Database):
-    """Generates monetized link from Admin Settings."""
+    """Generates monetized link from Admin Settings (Bug Fixed)."""
     api_url = await db.get_config("shortlink_api", "https://shareus.io/api?api=KEY&url={url}")
-    # FIX: Robust formatting to prevent revenue loss (Bug #14)
     try:
         return api_url.format(url=long_url)
     except KeyError:
-        # Fallback: Agar {url} placeholder missing hai to append kar do
-        return f"{api_url}&url={long_url}"
+        # Fix: Check agar URL me pehle se '?' hai ya nahi
+        if "?" in api_url:
+            return f"{api_url}&url={long_url}"
+        else:
+            return f"{api_url}?url={long_url}"
     except Exception:
-        # Worst case: Original URL return karo taaki user block na ho
         return long_url
 
 # ============ WEBHOOK URL ============
