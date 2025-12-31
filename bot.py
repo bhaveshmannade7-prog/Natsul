@@ -2554,44 +2554,37 @@ async def clear_ads_cmd(message: types.Message, db_primary: Database):
 async def set_shortlink_cmd(message: types.Message, db_primary: Database):
     args = message.text.split(maxsplit=2)
     
-    # Usage guide agar admin sirf /setshort likhe
     if len(args) < 2:
         usage = (
-            "🛠 **Shortlink Configuration**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🔹 **Enable:** `/setshort ON`\n"
-            "🔹 **Disable:** `/setshort OFF`\n"
-            "🔹 **Set API:** `/setshort LINK <your_api_url>`\n\n"
-            "⚠️ **Note:** API URL mein `{url}` placeholder hona zaroori hai.\n"
-            "Example: `https://shareus.io/api?api=KEY&url={url}`"
+            "🛠 **SHORTLINK CONFIGURATION / शॉर्टलिंक सेटअप**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🔹 **Enable:** `/setshort ON` (चालू करें)\n"
+            "🔹 **Disable:** `/setshort OFF` (बंद करें)\n"
+            "🔹 **Set API:** `/setshort LINK <url>` (API लिंक सेट करें)\n\n"
+            "⚠️ **Note:** URL mein `{url}` hona zaroori hai."
         )
         return await message.answer(usage)
 
     cmd_type = args[1].upper()
 
     if cmd_type == "ON":
-        # Database mein Boolean True save karein
         await db_primary.update_config("shortlink_enabled", True)
-        await message.answer("✅ **Monetization Enabled!** Users will now see shortlinks.")
+        await message.answer("✅ **Monetization Enabled!**\nUsers will now see shortlinks once every 24h.")
 
     elif cmd_type == "OFF":
-        # Database mein Boolean False save karein
         await db_primary.update_config("shortlink_enabled", False)
-        await message.answer("❌ **Monetization Disabled!** Users will get direct files.")
+        await message.answer("❌ **Monetization Disabled!**\nDirect downloads are now active.")
 
     elif cmd_type == "LINK":
         if len(args) < 3:
-            return await message.answer("⚠️ **Error:** API URL missing!\nFormat: `/setshort LINK https://api.com?key=123&url={url}`")
+            return await message.answer("⚠️ **Error:** API URL missing! / यूआरएल गायब है।")
         
         new_api = args[2].strip()
-        
-        # {url} mandatory check
         if "{url}" not in new_api:
-            return await message.answer("❌ **Invalid API:** URL mein `{url}` hona zaroori hai taaki bot link replace kar sake.")
+            return await message.answer("❌ **Invalid API:** `{url}` placeholder is missing!")
         
         await db_primary.update_config("shortlink_api", new_api)
         await message.answer(f"🚀 **Shortlink API Updated!**\nURL: `{new_api}`")
-
     else:
         await message.answer("❌ **Invalid Option!** Use `ON`, `OFF`, or `LINK`.")
 
