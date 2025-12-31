@@ -737,176 +737,172 @@ async def load_fuzzy_cache(db: Database):
             logger.error(f"Fuzzy cache load karte waqt error: {e}", exc_info=True)
             fuzzy_movie_cache = {}
 
-#
-# ==================================================
-# +++++ NEW: SMART INTENT ENGINE V6 (Fixed and Improved) ++++++++++++++++
-# ==================================================
-#
-def get_smart_match_score(query_tokens: List[str], target_clean: str) -> int:
+# ==========================================================
+# +++++++ SEARCH ENGINE V7 "THE SENTINEL" (ULTIMATE) +++++++
+# ==========================================================
+
+def get_smart_match_score_v7(query_tokens: List[str], target_clean: str, target_year: str = None) -> int:
     """
-    Intent Engine V6:
-    1. Word Presence: Checks if key query tokens exist in the target (Big Bonus).
-    2. Sequence Match: Original V5 sequence check (Small Bonus).
-    3. Aesthetic Penalty: Penalizes short queries matching long titles too closely.
+    V7 "Sentinel" Logic:
+    1. Exact & Word Intersection (Fast Set Logic)
+    2. Acronym Detection (KGF -> Kolar Gold Fields)
+    3. Order-Independent Word Matching (Transposition)
+    4. Strict Sequence Check (V5 Heritage)
+    5. Intelligent Year Bias & Length Penalty
     """
     if not query_tokens or not target_clean: return 0
     
     score = 0
-    query_str_tight = "".join(query_tokens)
-    target_str_tight = re.sub(r'\s+', '', target_clean)
-    
-    # --- RULE 1: WORD PRESENCE (Most Important: V6 Upgrade) ---
     target_tokens = target_clean.split()
-    matched_words = 0
+    target_set = set(target_tokens)
+    query_set = set(query_tokens)
     
-    # Query ke har token ko title mein dhoondho
-    for q_token in query_tokens:
-        if len(q_token) < 2: continue # Ignore single letters (a, an, the)
-        
-        # Simple containment check: token target mein hai ya nahi
-        if q_token in target_tokens or any(q_token in t_token for t_token in target_tokens):
-            matched_words += 1
-            
-    if matched_words == len([t for t in query_tokens if len(t) >= 2]):
-        score += 250 # Full match (e.g., 'me next' in 'meet me next christmas')
-    elif matched_words > 0:
-        score += 100 * (matched_words / len([t for t in query_tokens if len(t) >= 2])) # Partial match
-        
-    # --- RULE 2: STRICT SEQUENCE CHECK (Original V5 Logic) ---
+    # --- 1. ACRONYM DETECTION (V7 NEW) ---
+    # Agar query choti hai, toh acronym check karo (e.g., "kgf")
+    if len(query_tokens) == 1 and len(query_tokens[0]) <= 5:
+        acronym = "".join([w[0] for w in target_tokens if w])
+        if query_tokens[0] == acronym:
+            score += 500 # Major boost for acronyms
+
+    # --- 2. WORD INTERSECTION (V7 OPTIMIZED) ---
+    # Intersection is very fast in Python (CPU Friendly)
+    common_words = query_set.intersection(target_set)
+    match_ratio = len(common_words) / len(query_set) if query_set else 0
+    
+    if match_ratio == 1.0:
+        score += 400 # Perfect word match
+    elif match_ratio >= 0.5:
+        score += 200 * match_ratio
+
+    # --- 3. WORD TRANSPOSITION & POSITION (V7 NEW) ---
+    # Bonus agar pehla word match kar jaye
+    if query_tokens[0] in target_tokens:
+        pos = target_tokens.index(query_tokens[0])
+        if pos == 0: score += 100 # Direct start bonus
+        else: score += 50
+
+    # --- 4. STRICT SEQUENCE CHECK (V5/V6 Heritage) ---
+    query_str_tight = "".join(query_tokens)
+    target_str_tight = "".join(target_tokens)
+    
     last_idx = -1
-    broken = False
+    sequence_broken = False
     for char in query_str_tight:
         found_idx = target_str_tight.find(char, last_idx + 1)
         if found_idx == -1:
-            broken = True
+            sequence_broken = True
             break
         last_idx = found_idx
     
-    if not broken:
-        score += 150 # Sequence bonus
-        
-        # Tie-breaker: Length Difference (smaller diff = better)
+    if not sequence_broken:
+        score += 150
+        # Length normalization
         len_diff = abs(len(target_str_tight) - len(query_str_tight))
-        score -= min(len_diff * 5, 50) # Moderate penalty max 50
-    
-    # --- RULE 3: AESTHETIC PENALTY (V6 Anti-False Positive) ---
-    # Agar query choti hai (length < 8) lekin bahut zyaada words match ho rahe hain
-    if len(query_str_tight) < 8 and (score > 100):
-        # Long target title ko penalize karein
-        if len(target_str_tight) > 20:
-             score -= 50
-    
-    return score
+        score -= min(len_diff * 3, 50)
 
-def python_fuzzy_search(query: str, limit: int = 10, **kwargs) -> List[Dict]:
+    # --- 5. INTELLIGENT YEAR BIAS (PRO Logic) ---
+    query_year = next((t for t in query_tokens if t.isdigit() and len(t) == 4), None)
+    if query_year:
+        if target_year and query_year == str(target_year):
+            score += 450 # Priority for correct year
+        elif target_year:
+            score -= 150 # Heavy penalty for wrong year
+
+    # --- 6. SMART PENALTIES ---
+    # Choti queries ko lambe titles se bachana
+    if len(query_str_tight) < 5 and len(target_str_tight) > 20:
+        score -= 100
+
+    return int(score)
+
+def python_fuzzy_search(query: str, limit: int = 15, **kwargs) -> List[Dict]:
     """
-    Smart V6 Search: Hybrid approach with Intent Engine V6 Re-Ranking.
-    Fixed for Bug #6 (Shadowing) and Bug #2 (Thread Safety).
+    V7 Engine: Hybrid Set-Logic + RapidFuzz Re-Ranking.
+    Optimized for CPU efficiency while maintaining 800 candidate limit.
     """
-    # 1. Thread Safety: Snapshot le rahe hain
     current_cache = kwargs.get('cache_snapshot') or fuzzy_movie_cache
-    if not current_cache:
-        return []
+    if not current_cache: return []
 
     try:
-        q_fuzzy = clean_text_for_fuzzy(query) 
-        q_anchor = clean_text_for_search(query) 
+        q_clean = clean_text_for_search(query)
+        if not q_clean: return []
         
-        if not q_fuzzy or not q_anchor: return []
-        
-        query_tokens = [t for t in q_anchor.split() if t]
+        query_tokens = [t for t in q_clean.split() if t]
         candidates = []
         seen_imdb = set()
         
-        # --- 1. EXACT MATCH ANCHOR (Bug #6: List Support Added) ---
-        anchor_keys = [q_anchor]
-        if q_anchor.startswith('the '):
-             anchor_keys.append(q_anchor[4:]) 
-        else:
-             anchor_keys.append('the ' + q_anchor) 
+        # --- PHASE 1: EXACT ANCHOR (Immediate Priority) ---
+        anchor_keys = {q_clean}
+        if q_clean.startswith('the '): anchor_keys.add(q_clean[4:])
+        else: anchor_keys.add('the ' + q_clean)
 
-        for key in set(anchor_keys):
+        for key in anchor_keys:
             if key in current_cache:
-                # Bug #6 Fix: Cache ab list return karega, single dict nahi
-                movies_list = current_cache[key]
-                
-                # Safety fallback: Agar galti se dict aa jaye (transition phase me)
-                if isinstance(movies_list, dict): movies_list = [movies_list]
-
-                for data in movies_list:
+                movies = current_cache[key]
+                if isinstance(movies, dict): movies = [movies]
+                for data in movies:
                     if data['imdb_id'] not in seen_imdb:
-                         candidates.append({
+                        candidates.append({
                             'imdb_id': data['imdb_id'],
                             'title': data['title'],
                             'year': data.get('year'),
-                            'score': 1001,
-                            'match_type': 'exact_anchor'
-                         })
-                         seen_imdb.add(data['imdb_id'])
-                         logger.debug(f"🎯 Exact Anchor Match: {data['title']}")
-        
-        # --- 2. RAPIDFUZZ BROAD FETCH ---
+                            'score': 3000, # Highest possible
+                            'match_type': 'anchor'
+                        })
+                        seen_imdb.add(data['imdb_id'])
+
+        # --- PHASE 2: BROAD FETCH (800 Candidates Limit) ---
         all_titles = list(current_cache.keys())
-        
-        # Smart Balance Settings (Limit 800, Cutoff 40) - Jo humne decide kiya tha
+        # WRatio use kar rahe hain typos handle karne ke liye
         pre_filtered = process.extract(
-            q_fuzzy, 
+            q_clean, 
             all_titles, 
-            limit=800,  
+            limit=800, 
             scorer=fuzz.WRatio, 
-            score_cutoff=40 
+            score_cutoff=35 # Thoda loose rakha taaki transposition pakad sake
         )
         
-        # --- 3. INTENT ENGINE V6 RE-RANKING (Bug #6: List Support Added) ---
+        # --- PHASE 3: V7 RE-RANKING (Intelligence Layer) ---
         for clean_title_key, fuzz_score, _ in pre_filtered:
             movies_list = current_cache.get(clean_title_key)
             if not movies_list: continue
-
-            # Safety fallback
             if isinstance(movies_list, dict): movies_list = [movies_list]
 
-            # Bug #6 Fix: Iterate over all movies with same title
             for data in movies_list:
                 if data['imdb_id'] in seen_imdb: continue
                 
-                t_clean_key = clean_title_key 
-                intent_score = get_smart_match_score(query_tokens, t_clean_key)
+                # Sentinel Logic Call
+                intent_score = get_smart_match_score_v7(query_tokens, clean_title_key, data.get('year'))
                 
-                final_score = 0
-                match_type = "fuzzy"
-                
-                if fuzz_score >= 95:
-                    final_score = 900 + intent_score
-                    match_type = "high_fuzzy"
-                elif intent_score > 50: 
-                    final_score = 500 + intent_score 
-                    match_type = "intent"
+                # Combine RapidFuzz base with Sentinel intelligence
+                if fuzz_score >= 98:
+                    final_score = 1500 + intent_score
+                    m_type = "perfect"
+                elif intent_score >= 500:
+                    final_score = 1000 + intent_score
+                    m_type = "intent_high"
+                elif intent_score > 200:
+                    final_score = 700 + intent_score
+                    m_type = "intent_mid"
                 else:
-                    final_score = fuzz_score
+                    final_score = fuzz_score + (intent_score * 0.5)
+                    m_type = "fuzzy"
 
                 candidates.append({
                     'imdb_id': data['imdb_id'],
                     'title': data['title'],
                     'year': data.get('year'),
                     'score': final_score,
-                    'match_type': match_type
+                    'match_type': m_type
                 })
                 seen_imdb.add(data['imdb_id'])
 
-        # 4. Final Sort & Deduplicate
+        # Final Sort by Score
         candidates.sort(key=lambda x: x['score'], reverse=True)
-        
-        unique_candidates = []
-        final_seen_imdb = set()
-        for c in candidates:
-            if c['imdb_id'] not in final_seen_imdb:
-                unique_candidates.append(c)
-                final_seen_imdb.add(c['imdb_id'])
-        
-        return unique_candidates[:limit]
+        return candidates[:limit]
         
     except Exception as e:
-        logger.error(f"python_fuzzy_search mein error: {e}", exc_info=True)
+        logger.error(f"V7 Engine Error: {e}")
         return []
 
 # ============ LIFESPAN MANAGEMENT (FastAPI) (F.I.X.E.D.) ============
