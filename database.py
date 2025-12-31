@@ -198,7 +198,7 @@ class Database:
     # ==========================================
     async def get_event_count(self, event_name: str) -> int:
     # Aapki events collection ka naam 'events' hona chahiye
-    doc = await self.db.events.find_one({"event": event_name})
+           doc = await self.db.events.find_one({"event": event_name})
     return doc.get("count", 0) if doc else 0
 
     async def add_ad(self, text, btn_text=None, btn_url=None):
