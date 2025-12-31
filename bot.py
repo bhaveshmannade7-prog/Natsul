@@ -1362,7 +1362,8 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
     if len(args) > 1 and args[1].startswith("unlock_"):
         token = args[1].split("_")[1]
         token_doc = await db_primary.verify_unlock_token(token, user_id)
-            if token_doc:
+        
+        if token_doc:
             # Bilingual Success Message
             success_msg = (
                 "✅ **DOWNLOAD UNLOCKED / अनलॉक हो गया!**\n"
@@ -1390,7 +1391,7 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
                       asyncio.create_task(send_sponsor_ad(user_id, bot, db_primary, redis_cache))
             elif movie:
                  await message.answer("⚠️ **Content Unavailable**: File data is corrupted.")
-    # --- END MONETIZATION CATCH ---
+            return # Yahan se wapas bhej dena hai
 
         # --- ADMIN WELCOME LOGIC (NEW) ---
     if user_id == ADMIN_USER_ID:
