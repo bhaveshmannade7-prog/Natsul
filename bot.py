@@ -1361,13 +1361,13 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
     if len(args) > 1 and args[1].startswith("unlock_"):
         token = args[1].split("_")[1]
         token_doc = await db_primary.verify_unlock_token(token, user_id)
-    if token_doc:
+        if token_doc:
             # --- BILINGUAL SUCCESS MESSAGE ---
             success_msg = (
                 "✅ **DOWNLOAD UNLOCKED / अनलॉक हो गया!**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "🇺🇸 **Success!** Delivering your file. You now have a **24-hour direct pass**.\n"
-                "🇮🇳 **सफल!** आपकी फाइल भेजी जा रही है। अब आपको **24 घंटे तक** कोई शॉर्टलिंक नहीं दिखेगा।"
+                "🇮🇳 **सफल!** आपकी फाइल भेजी जा रही है। अब आपको **24 घंटे तक** कोई शॉर्टलिंक नहीं दिखेga।"
             )
             await message.answer(success_msg)
             
@@ -1383,16 +1383,15 @@ async def start_command(message: types.Message, bot: Bot, db_primary: Database, 
             movie = await safe_db_call(db_primary.get_movie_by_imdb(imdb_id))
             
             if movie and movie.get("channel_id") and movie.get("message_id"):
-                 res = await safe_tg_call(bot.copy_message(user_id, int(movie["channel_id"]), movie["message_id"]), semaphore=TELEGRAM_COPY_SEMAPHORE)
-                 if res:
-                      # Auto-delete schedule
-                      asyncio.create_task(schedule_auto_delete(bot, user_id, res.message_id, message.message_id))
-                      # Sponsor ad trigger
-                      asyncio.create_task(send_sponsor_ad(user_id, bot, db_primary, redis_cache))
-            elif movie:
-                 await message.answer("⚠️ **Content Unavailable**: File data is corrupted.")
-            return # Ensure it returns here
-
+                res = await safe_tg_call(bot.copy_message(user_id, int(movie["channel_id"]), movie["message_id"]), semaphore=TELEGRAM_COPY_SEMAPHORE)
+                if res:
+                    # Auto-delete schedule
+                    asyncio.create_task(schedule_auto_delete(bot, user_id, res.message_id, message.message_id))
+                    # Sponsor ad trigger
+                    asyncio.create_task(send_sponsor_ad(user_id, bot, db_primary, redis_cache))
+            else: # <--- Ab yeh bilkul sahi aligned hai
+                await message.answer("⚠️ **Content Unavailable**: File data is corrupted.")
+            return
         else:
             await message.answer("❌ **Verification Failed!**\nToken is invalid or expired. Please search again and use the new link.")
             return
