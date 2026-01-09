@@ -22,7 +22,19 @@ load_dotenv()
 
 # --- NEW IMPORTS ---
 # FIXED: name 'TELEGRAM_DELETE_SEMAPHORE' instead of typo 'TELEGRAM_DELETE_SEMAP_RE'
-from core_utils import safe_tg_call, safe_db_call, DB_SEMAPHORE, TELEGRAM_DELETE_SEMAPHORE, TELEGRAM_COPY_SEMAPHORE, TELEGRAM_BROADCAST_SEMAPHORE, WEBHOOK_SEMAPHORE, TG_OP_TIMEOUT, DB_OP_TIMEOUT
+# --- SMART WRAPPER START (RuntimeError Fix) ---
+from core_utils import safe_tg_call as _base_safe_tg_call, safe_db_call, DB_SEMAPHORE, TELEGRAM_DELETE_SEMAPHORE, TELEGRAM_COPY_SEMAPHORE, TELEGRAM_BROADCAST_SEMAPHORE, WEBHOOK_SEMAPHORE, TG_OP_TIMEOUT, DB_OP_TIMEOUT
+
+async def safe_tg_call(coro, timeout=TG_OP_TIMEOUT, semaphore=None, bot=None):
+    """
+    Ye wrapper apne aap global 'bot' instance ko use karega.
+    Isse line 50 wala 'Not Mounted' error jad se khatam ho jayega.
+    """
+    # Global bot variable ko dhoondta hai (Line 233 wala)
+    target_bot = bot or globals().get('bot')
+    return await _base_safe_tg_call(coro, timeout=timeout, semaphore=semaphore, bot=target_bot)
+# --- SMART WRAPPER END ---
+
 from redis_cache import redis_cache, RedisCacheLayer
 from queue_wrapper import priority_queue, PriorityQueueWrapper, QUEUE_CONCURRENCY, PRIORITY_ADMIN
 from smart_watchdog import SmartWatchdog, WATCHDOG_ENABLED 
