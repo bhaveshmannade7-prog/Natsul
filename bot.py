@@ -2524,9 +2524,34 @@ async def sync_m12_freeze_fix(message: types.Message, db_primary: Database, db_f
 async def force_rebuild_freeze_fix(message: types.Message, db_primary: Database):
     await run_in_background(force_rebuild_m1_command, message, db_primary=db_primary)
 
-@dp.message(Command("sync_mongo_1_to_neon"), AdminFilter())
-async def sync_neon_freeze_fix(message: types.Message, db_primary: Database, db_neon: NeonDB):
-    await run_in_background(sync_mongo_1_to_neon_command, message, db_primary=db_primary, db_neon=db_neon)
+@dp.message(Command("sync_mongo_1_to_3"), AdminFilter())
+async def sync_m13_command(message: types.Message, db_primary: Database, db_backup: Database):
+    status_msg = await message.answer("🔄 **Syncing M1 → M3 (Mongo Backup)**...")
+    
+    # M1 se data nikalein
+    mongo_movies = await safe_db_call(db_primary.get_all_movies_for_neon_sync(), timeout=300)
+    if not mongo_movies:
+        await status_msg.edit_text("❌ M1 is empty."); return
+
+    total = len(mongo_movies)
+    processed = 0
+    
+    for movie in mongo_movies:
+        await db_backup.add_movie(
+            imdb_id=movie['imdb_id'],
+            title=movie['title'],
+            year=None,
+            file_id=movie['file_id'],
+            message_id=movie['message_id'],
+            channel_id=movie['channel_id'],
+            clean_title=clean_text_for_search(movie['title']),
+            file_unique_id=movie['file_unique_id']
+        )
+        processed += 1
+        if processed % 100 == 0:
+            await status_msg.edit_text(f"🔄 Syncing M1 → M3: {processed}/{total}")
+
+    await status_msg.edit_text(f"✅ Sync Complete! {processed} movies added to M3.")
 
 @dp.message(Command("remove_library_duplicates"), AdminFilter())
 async def rem_dupes_freeze_fix(message: types.Message, db_primary: Database, db_neon: NeonDB):
