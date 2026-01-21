@@ -128,7 +128,7 @@ try:
     # --- 3 DB Connections ---
     DATABASE_URL_PRIMARY = os.environ["DATABASE_URL_PRIMARY"]
     DATABASE_URL_FALLBACK = os.environ["DATABASE_URL_FALLBACK"]
-    NEON_DATABASE_URL = os.environ["NEON_DATABASE_URL"]
+    DATABASE_URL_BACKUP = os.environ["DATABASE_URL_BACKUP"]
     
     # --- NEW: Redis URL ---
     REDIS_URL = os.getenv("REDIS_URL")
