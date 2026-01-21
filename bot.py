@@ -308,20 +308,16 @@ try:
     # --- 3 Database Objects ---
     # FIX: db_primary ko pehle initialize karein taaki NeonDB use kar sake
     db_primary = Database(DATABASE_URL_PRIMARY) 
-    
-    # FIX: NeonDB ko db_primary instance pass karein (Cross-process lock ke liye)
-    db_neon = NeonDB(NEON_DATABASE_URL, db_primary_instance=db_primary) 
-    
-    db_fallback = Database(DATABASE_URL_FALLBACK)
-    
-    # --- Dependency Injection ---
-    dp = Dispatcher(
-        storage=storage, 
-        db_primary=db_primary, 
-        db_fallback=db_fallback, 
-        db_neon=db_neon,
-        redis_cache=redis_cache # Naya: Redis cache inject karein
-    )
+db_fallback = Database(DATABASE_URL_FALLBACK)
+db_backup = Database(DATABASE_URL_BACKUP) # Neon ki jagah 3rd Mongo
+
+dp = Dispatcher(
+    storage=storage, 
+    db_primary=db_primary, 
+    db_fallback=db_fallback, 
+    db_backup=db_backup, # db_neon ko db_backup se badla
+    redis_cache=redis_cache 
+)
     # Store start time on dispatcher for watchdog use
     dp.start_time = datetime.now(timezone.utc)
     
