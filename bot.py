@@ -2224,7 +2224,7 @@ async def run_tasks():
 @dp.message(Command("stats"), AdminFilter())
 @handler_timeout(20)
 # --- NEW: Centralized Dashboard Generator (Prevents Code Duplication) ---
-async def generate_admin_dashboard(db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
+async def generate_admin_dashboard(db_primary: Database, db_fallback: Database, db_tertiary: Database, redis_cache: RedisCacheLayer):
     """
     Generates the text and markup for the admin dashboard.
     Fetches: User counts, Movie counts, System Health, Monetization Status, Ads Stats.
@@ -2233,13 +2233,13 @@ async def generate_admin_dashboard(db_primary: Database, db_fallback: Database, 
     user_count_task = safe_db_call(db_primary.get_user_count(), default=0)
     mongo_1_count_task = safe_db_call(db_primary.get_movie_count(), default=0)
     mongo_2_count_task = safe_db_call(db_fallback.get_movie_count(), default=0)
-    neon_count_task = safe_db_call(db_neon.get_movie_count(), default=0)
+    db3_count_task = safe_db_call(db_tertiary.get_movie_count(), default=0)
     concurrent_users_task = safe_db_call(db_primary.get_concurrent_user_count(ACTIVE_WINDOW_MINUTES), default=0)
     
     # 2. Connection Checks
     mongo_1_ready_task = safe_db_call(db_primary.is_ready(), default=False)
     mongo_2_ready_task = safe_db_call(db_fallback.is_ready(), default=False)
-    neon_ready_task = safe_db_call(db_neon.is_ready(), default=False)
+    db3_ready_task = safe_db_call(db_tertiary.is_ready(), default=False)
     
     # 3. Monetization & Ads Data (NEW ADDITION)
     shortlink_status_task = safe_db_call(db_primary.get_config("shortlink_enabled", False), default=False)
@@ -2291,7 +2291,7 @@ async def generate_admin_dashboard(db_primary: Database, db_fallback: Database, 
         f"*🖥️ INFRASTRUCTURE*\n"
         f"• *Primary Node (M1):* {status_icon(m1_ok)} | 📂 {m1_count:,}\n"
         f"• *Fallback Node (M2):* {status_icon(m2_ok)} | 📂 {m2_count:,}\n"
-        f"• *Neon Backup:* {status_icon(neon_ok)} | 📂 {neon_count:,}\n"
+        f"• *Tertiary Node:* {status_icon(neon_ok)} | 📂 {neon_count:,}\n" # Label Change
         f"• *Redis Cache:* {cache_icon(redis_ok)}\n\n"
         
         f"*🚦 TRAFFIC & USAGE*\n"
