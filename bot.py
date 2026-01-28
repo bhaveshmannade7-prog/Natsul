@@ -1002,15 +1002,16 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Database 2 (MongoDB Fallback) initialize karte waqt error: {e}")
 
     # NeonDB 3
-    try:
-        # NeonDB init is a pure ASYNC method (asyncpg)
-        await db_neon.init_db() 
-        logger.info("Database 3 (NeonDB/Postgres Backup) initialization safal.")
-    except Exception as e:
-        logger.critical(f"FATAL: Database 3 (NeonDB/Postgres Backup) initialize nahi ho paya: {e}", exc_info=True)
-        await shutdown_procedure()
-        raise RuntimeError("NeonDB/Postgres connection fail (startup).") from e
-
+# Database 3 (Tertiary MongoDB)
+try:
+    # Replaced asyncpg init with pymongo init pattern
+    db_tertiary_success = await safe_db_call(db_tertiary.init_db(), default=False)
+    if db_tertiary_success:
+         logger.info("Database 3 (MongoDB Tertiary) initialization safal.")
+    else:
+         logger.warning("Database 3 (MongoDB Tertiary) initialization failed. Running without 3rd backup.")
+except Exception as e:
+    logger.warning(f"Database 3 (MongoDB Tertiary) initialize karte waqt error: {e}")
 
     # --- NAYA: Fuzzy Cache Load Karein (ab Redis/Mongo se) ---
     await load_fuzzy_cache(db_primary)
