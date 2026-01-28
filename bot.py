@@ -2193,12 +2193,12 @@ async def auto_index_handler(message: types.Message, db_primary: Database, db_fa
     # 7. Database Operations
     db1_task = safe_db_call(db_primary.add_movie(imdb_id, title, year, file_id, message.message_id, message.chat.id, clean_title_val, file_unique_id))
     db2_task = safe_db_call(db_fallback.add_movie(imdb_id, title, year, file_id, message.message_id, message.chat.id, clean_title_val, file_unique_id))
-    neon_task = safe_db_call(db_neon.add_movie(message.message_id, message.chat.id, file_id, file_unique_id, imdb_id, title))
-    
-    async def run_tasks():
-        res = await db1_task
-        await db2_task
-        await neon_task
+    db3_task = safe_db_call(db_tertiary.add_movie(imdb_id, title, year, file_id, message.message_id, message.chat.id, clean_title_val, file_unique_id))
+
+async def run_tasks():
+    res = await db1_task
+    await db2_task
+    await db3_task # Updated task
         
         # Result check: Agar "duplicate" ya "updated" hai to log karo
         if res == "duplicate":
