@@ -3276,7 +3276,7 @@ async def main_polling():
         if not db_primary_success:
             raise RuntimeError("Database 1 connection failed on startup.")
             
-        await db_neon.init_db()
+        await safe_db_call(db_tertiary.init_db())
         await load_fuzzy_cache(db_primary) 
     except Exception as init_err:
         logger.critical(f"Local main() mein DB init fail: {init_err}", exc_info=True); return
@@ -3290,7 +3290,7 @@ async def main_polling():
     db_objects_for_queue = {
         'db_primary': db_primary,
         'db_fallback': db_fallback,
-        'db_neon': db_neon,
+        'db_tertiary': db_tertiary,
         'redis_cache': redis_cache,
         'admin_id': ADMIN_USER_ID
     }
