@@ -3119,7 +3119,7 @@ async def rebuild_clean_titles_m2_command(message: types.Message, db_fallback: D
 
 @dp.message(Command("cleanup_titles"), AdminFilter())
 @handler_timeout(60)
-async def cleanup_titles_command(message: types.Message, db_primary: Database, db_fallback: Database, db_neon: NeonDB):
+async def cleanup_titles_command(message: types.Message, db_primary: Database, db_fallback: Database, db_tertiary: Database):
     msg = await safe_tg_call(message.answer("🧹 **Title Cleanup**: Removing unwanted links and usernames (M1 & M2)..."), semaphore=TELEGRAM_COPY_SEMAPHORE)
     if not msg: return
 
@@ -3128,7 +3128,12 @@ async def cleanup_titles_command(message: types.Message, db_primary: Database, d
     
     # Cleanup in M2
     updated_m2, total_m2 = await safe_db_call(db_fallback.cleanup_movie_titles(), timeout=240, default=(0,0))
+    # Cleanup in M3
+    updated_m3, total_m3 = await safe_db_call(db_tertiary.cleanup_movie_titles(), timeout=240, default=(0,0))
 
+    if updated_m1 > 0 or updated_m2 > 0 or updated_m3 > 0:
+         # ...
+         f"**Tertiary (M3)**: {updated_m3:,} titles cleaned/rebuilt (Total: {total_m3:,})\n"
     if updated_m1 > 0 or updated_m2 > 0:
         await load_fuzzy_cache(db_primary) # M1 se Cache reload karein
         
