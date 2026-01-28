@@ -2085,17 +2085,22 @@ async def migration_handler(message: types.Message, bot: Bot, db_primary: Databa
     # add_movie is an async method in database.py
     db1_task = safe_db_call(db_primary.add_movie(imdb_id, title, year, file_id, message_id, channel_id, clean_title_val, file_unique_id))
     db2_task = safe_db_call(db_fallback.add_movie(imdb_id, title, year, file_id, message_id, channel_id, clean_title_val, file_unique_id))
-    # db_neon.add_movie is an async method in neondb.py
-    neon_task = safe_db_call(db_neon.add_movie(message_id, channel_id, file_id, file_unique_id, imdb_id, title))
-    
-    db1_res, db2_res, neon_res = await asyncio.gather(db1_task, db2_task, neon_task)
-    
-    def get_status(res):
-        return "✨ Added" if res is True else ("🔄 Updated" if res == "updated" else ("ℹ️ Skipped" if res == "duplicate" else "❌ FAILED"))
+# REPLACED: Use db_tertiary.add_movie with CORRECT ARGUMENT ORDER (same as db_primary)
+db3_task = safe_db_call(db_tertiary.add_movie(imdb_id, title, year, file_id, message_id, channel_id, clean_title_val, file_unique_id))
 
-    db1_status = get_status(db1_res)
-    db2_status = get_status(db2_res)
-    neon_status = "✅ Synced" if neon_res else "❌ FAILED"
+db1_res, db2_res, db3_res = await asyncio.gather(db1_task, db2_task, db3_task)
+
+def get_status(res):
+    return "✨ Added" if res is True else ("🔄 Updated" if res == "updated" else ("ℹ️ Skipped" if res == "duplicate" else "❌ FAILED"))
+
+db1_status = get_status(db1_res)
+db2_status = get_status(db2_res)
+db3_status = get_status(db3_res) # Updated variable name
+
+# ... (Inside result_text construction)
+f"🔹 Primary Node: {db1_status}\n"
+f"🔹 Fallback Node: {db2_status}\n"
+f"🔹 Tertiary Node: {db3_status}" # Updated Label
     
     if db1_res is True:
         # Fuzzy Cache ko update karein
