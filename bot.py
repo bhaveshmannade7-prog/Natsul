@@ -391,8 +391,9 @@ async def shutdown_procedure():
             # Motor client.close() is synchronous
             db_fallback.client.close()
             logger.info("MongoDB (Fallback) client connection close ho gaya.")
-        if db_neon:
-            await db_neon.close()
+        if db_backup and db_backup.client:
+            db_backup.client.close()
+            logger.info("MongoDB (Backup M3) client connection close ho gaya.")
     except Exception as e:
         logger.error(f"Database connections close karte waqt error: {e}")
         
