@@ -2883,41 +2883,45 @@ async def cleanup_mongo_2_command(message: types.Message, db_fallback: Database)
 
 @dp.message(Command("remove_library_duplicates"), AdminFilter())
 @handler_timeout(3600)
-async def remove_library_duplicates_command(message: types.Message, status_msg: types.Message, db_primary: Database, db_neon: NeonDB):
-    # This function is now correctly wrapped and called as a background task.
-    await safe_tg_call(status_msg.edit_text("🧹 **Library Cleanup**: Scanning NeonDB for duplicates..."))
+async def remove_library_duplicates_command(message: types.Message, status_msg: types.Message, db_primary: Database, db_backup: Database):
+    await safe_tg_call(status_msg.edit_text("🧹 **Library Cleanup**: Scanning M3 for duplicates..."))
     
-    # find_and_delete_duplicates is an async method in neondb.py
-    messages_to_delete, total_duplicates = await safe_db_call(db_neon.find_and_delete_duplicates(batch_limit=100), default=([], 0))
+    # Mongo Aggregation to find duplicates by file_unique_id
+    pipeline = [
+        {"$group": {
+            "_id": "$file_unique_id",
+            "count": {"$sum": 1},
+            "docs": {"$push": {"message_id": "$message_id", "channel_id": "$channel_id", "added_date": "$added_date"}}
+        }},
+        {"$match": {"count": {"$gt": 1}}}
+    ]
     
-    if not messages_to_delete:
-        await safe_tg_call(status_msg.edit_text("✅ **Library Clean**: No duplicates found."))
-        return
-        
-    await safe_tg_call(status_msg.edit_text(f"⚠️ **Duplicates Found**: {total_duplicates}\n🗑️ Deleting **{len(messages_to_delete)}** messages..."))
-    
-    deleted_count, failed_count = 0, 0
-    tasks = []
-    
-    async def delete_message(msg_id: int, chat_id: int):
-        nonlocal deleted_count, failed_count
-        res = await safe_tg_call(bot.delete_message(chat_id=chat_id, message_id=msg_id), semaphore=TELEGRAM_DELETE_SEMAPHORE)
-        if res or res is None: deleted_count += 1
-        else: failed_count += 1
+    messages_to_delete = []
+    try:
+        cursor = db_backup.movies.aggregate(pipeline)
+        async for group in cursor:
+            # Sort docs by date to keep the latest one
+            sorted_docs = sorted(group['docs'], key=lambda x: x.get('added_date', datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+            # Keep index 0, mark others for deletion
+            for doc in sorted_docs[1:]:
+                messages_to_delete.append((doc['message_id'], doc['channel_id']))
+    except Exception as e:
+        logger.error(f"Duplicate scan error: {e}")
+        await status_msg.edit_text("❌ Error scanning duplicates."); return
 
-    for msg_id, chat_id in messages_to_delete:
-        tasks.append(delete_message(msg_id, chat_id))
+    if not messages_to_delete:
+        await safe_tg_call(status_msg.edit_text("✅ **Library Clean**: No duplicates found in M3.")); return
         
-    await asyncio.gather(*tasks)
+    total_dupes = len(messages_to_delete)
+    await safe_tg_call(status_msg.edit_text(f"⚠️ Found {total_dupes} duplicates.\n🗑️ Deleting from Telegram..."))
     
-    await safe_tg_call(status_msg.edit_text(
-        f"✅ **Cleanup Report**\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🗑️ Deleted: {deleted_count}\n"
-        f"❌ Failed: {failed_count}\n"
-        f"⚠️ Remaining: {max(0, total_duplicates - deleted_count)}\n\n"
-        f"ℹ️ Run again to continue cleaning."
-    ))
+    deleted, failed = 0, 0
+    for msg_id, ch_id in messages_to_delete[:100]: # Batch of 100 for safety
+        res = await safe_tg_call(bot.delete_message(chat_id=ch_id, message_id=msg_id), semaphore=TELEGRAM_DELETE_SEMAPHORE)
+        if res: deleted += 1
+        else: failed += 1
+        
+    await safe_tg_call(status_msg.edit_text(f"✅ **Cleanup Report**\n🗑️ Deleted: {deleted}\n❌ Failed: {failed}\nℹ️ Run again for more."))
 @dp.message(Command("sync_mongo_1_to_neon"), AdminFilter())
 @handler_timeout(1800)
 async def sync_mongo_1_to_neon_command(message: types.Message, status_msg: types.Message, db_primary: Database, db_neon: NeonDB):
