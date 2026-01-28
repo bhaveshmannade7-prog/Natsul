@@ -2376,7 +2376,7 @@ async def show_admin_panel(message: types.Message, is_edit: bool = False):
         "• <code>/import_json</code> - Reply to JSON file\n"
         "• <code>/backup_channel ID</code> - Copy all files to channel\n"
         "• <code>/sync_mongo_1_to_2</code> - Sync M1 → M2\n"
-        "• <code>/sync_mongo_1_to_neon</code> - Sync M1 → Neon\n\n"
+        "• <code>/sync_mongo_1_to_3</code> - Sync M1 → Tertiary\n\n"
         
         "🔧 **MAINTENANCE & REPAIR**\n"
         "• <code>/check_db</code> - Diagnostics\n"
@@ -2384,7 +2384,7 @@ async def show_admin_panel(message: types.Message, is_edit: bool = False):
         "• <code>/cleanup_titles</code> - Remove @usernames/links from titles\n"
         "• <code>/rebuild_clean_titles_m1</code> - Fix M1 Index\n"
         "• <code>/rebuild_clean_titles_m2</code> - Fix M2 Index\n"
-        "• <code>/rebuild_neon_vectors</code> - Fix Neon Vectors\n"
+        "• <code>/rebuild_clean_titles_m3</code> - Fix M3 Index\n"
         "• <code>/force_rebuild_m1</code> - Deep Rebuild M1 (Slow)\n"
         "• <code>/remove_dead_movie ID</code> - Delete Movie\n"
         "• <code>/remove_library_duplicates</code> - Fix Channel Dupes\n"
