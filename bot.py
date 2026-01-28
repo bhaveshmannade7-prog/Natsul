@@ -2942,20 +2942,45 @@ async def remove_library_duplicates_command(message: types.Message, status_msg: 
         f"⚠️ Remaining: {max(0, total_duplicates - deleted_count)}\n\n"
         f"ℹ️ Run again to continue cleaning."
     ))
-@dp.message(Command("sync_mongo_1_to_neon"), AdminFilter())
+@dp.message(Command("sync_mongo_1_to_3"), AdminFilter())
 @handler_timeout(1800)
-async def sync_mongo_1_to_neon_command(message: types.Message, status_msg: types.Message, db_primary: Database, db_neon: NeonDB):
+async def sync_mongo_1_to_3_command(message: types.Message, status_msg: types.Message, db_primary: Database, db_tertiary: Database):
     # This is called via run_in_background
-    await safe_tg_call(status_msg.edit_text("🔄 **Syncing M1 → Neon**..."))
-    
-    # get_all_movies_for_neon_sync is an async method in database.py
-    mongo_movies = await safe_db_call(db_primary.get_all_movies_for_neon_sync(), timeout=300)
-    if not mongo_movies:
+await safe_tg_call(status_msg.edit_text("🔄 **Syncing M1 → M3 (Tertiary)**..."))
+
+    mongo_movies_full = await safe_db_call(db_primary.get_all_movies_for_neon_sync(), timeout=300)
+    if not mongo_movies_full:
         await safe_tg_call(status_msg.edit_text("❌ **Sync Failed**: No data in M1.")); return
-    
-    await safe_tg_call(status_msg.edit_text(f"✅ **Data Ready**: {len(mongo_movies):,} movies.\n🔄 Uploading to Neon..."))
-    # sync_from_mongo is an async method in neondb.py
-    processed_count = await safe_db_call(db_neon.sync_from_mongo(mongo_movies), timeout=1500, default=0)
+
+    total_movies = len(mongo_movies_full)
+    processed_count = 0
+    all_sync_tasks = [] 
+    BATCH_SIZE = 200
+
+    for movie in mongo_movies_full:
+        processed_count += 1
+        task = safe_db_call(db_tertiary.add_movie(
+            imdb_id=movie.get('imdb_id'),
+            title=movie.get('title'),
+            year=None, 
+            file_id=movie.get('file_id'),
+            message_id=movie.get('message_id'),
+            channel_id=movie.get('channel_id'),
+            clean_title=clean_text_for_search(movie.get('title')),
+            file_unique_id=movie.get('file_unique_id') or movie.get('file_id')
+        ))
+        all_sync_tasks.append(task)
+
+        if processed_count % BATCH_SIZE == 0:
+            await asyncio.gather(*all_sync_tasks)
+            all_sync_tasks = []
+            try:
+                 await safe_tg_call(status_msg.edit_text(f"🔄 **Syncing M1 → M3...**\nProgress: {processed_count:,} / {total_movies:,}"))
+            except TelegramBadRequest: pass
+
+    if all_sync_tasks:
+        await asyncio.gather(*all_sync_tasks)
+
     await safe_tg_call(status_msg.edit_text(f"✅ **Sync Complete**\nProcessed: {processed_count:,} records."))
 
 @dp.message(Command("sync_mongo_1_to_2"), AdminFilter())
