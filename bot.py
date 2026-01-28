@@ -3158,13 +3158,15 @@ async def set_limit_command(message: types.Message):
         await safe_tg_call(message.answer("❌ **Error**: Must be between 5-5000."), semaphore=TELEGRAM_COPY_SEMAPHORE)
 
 
-@dp.message(Command("rebuild_neon_vectors"), AdminFilter())
-@handler_timeout(600)
-async def rebuild_neon_vectors_command(message: types.Message, db_neon: NeonDB):
-    msg = await safe_tg_call(message.answer("🛠 **Rebuilding Neon Vectors**..."), semaphore=TELEGRAM_COPY_SEMAPHORE)
+@dp.message(Command("rebuild_clean_titles_m3"), AdminFilter())
+@handler_timeout(300)
+async def rebuild_clean_titles_m3_command(message: types.Message, db_tertiary: Database):
+    msg = await safe_tg_call(message.answer("🛠 **Rebuilding M3 Index**..."), semaphore=TELEGRAM_COPY_SEMAPHORE)
     if not msg: return
-    # rebuild_fts_vectors is an async method in neondb.py
-    updated_count = await safe_db_call(db_neon.rebuild_fts_vectors(), timeout=540, default=-1)
+    # Standard Mongo Rebuild
+    updated, total = await safe_db_call(db_tertiary.rebuild_clean_titles(clean_text_for_search), timeout=240, default=(0,0))
+    await safe_db_call(db_tertiary.create_mongo_text_index()) 
+    await safe_tg_call(msg.edit_text(f"✅ **M3 Rebuild Done**\nFixed: {updated:,} / {total:,}"))
     if updated_count >= 0:
         await safe_tg_call(msg.edit_text(f"✅ **Rebuild Done**\nUpdated: {updated_count:,} records."))
     else:
@@ -3189,7 +3191,7 @@ async def check_db_command(message: types.Message, db_primary: Database, db_neon
     # check_mongo_clean_title is an async method in database.py
     mongo_check_task = safe_db_call(db_primary.check_mongo_clean_title(), default={"title": "Error", "clean_title": "Mongo check failed"})
     # check_neon_clean_title is an async method in neondb.py
-    neon_check_task = safe_db_call(db_neon.check_neon_clean_title(), default={"title": "Error", "clean_title": "Neon check failed"})
+    db3_check_task = safe_db_call(db_tertiary.check_mongo_clean_title(), default={"title": "Error", "clean_title": "M3 check failed"})
     
     fuzzy_cache_check = {"title": "N/A", "clean_title": "--- EMPTY (Run /reload_fuzzy_cache) ---"}
     if fuzzy_movie_cache:
@@ -3221,10 +3223,9 @@ async def check_db_command(message: types.Message, db_primary: Database, db_neon
         f"**Redis Cache**\n"
         f"• Status: {redis_status}\n"
         f"• Size: {len(fuzzy_movie_cache):,} titles\n\n"
-        f"**Neon (Backup)**\n"
+        f"**Tertiary Node (M3)**\n"
         f"• Title: <code>{neon_res.get('title')}</code>\n"
         f"• Index: <code>{neon_res.get('clean_title')}</code>"
-    )
     await safe_tg_call(msg.edit_text(reply_text))
 
 
