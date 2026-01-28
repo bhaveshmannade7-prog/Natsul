@@ -73,10 +73,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from fastapi import FastAPI, BackgroundTasks, Request, HTTPException
 
-# --- Database Imports ---
+# database Imports
 from database import Database
-from neondb import NeonDB
-ADMIN_ACTIVE_TASKS = {} 
+# [DELETED] from neondb import NeonDB
+ADMIN_ACTIVE_TASKS = {}
 # ============ LOGGING SETUP ============
 logging.basicConfig(
     level=logging.INFO,
