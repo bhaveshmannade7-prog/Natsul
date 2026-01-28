@@ -1016,14 +1016,14 @@ except Exception as e:
     # --- NAYA: Fuzzy Cache Load Karein (ab Redis/Mongo se) ---
     await load_fuzzy_cache(db_primary)
 
-    # --- NEW: Start Priority Queue Workers ---
-    db_objects_for_queue = {
-        'db_primary': db_primary,
-        'db_fallback': db_fallback,
-        'db_neon': db_neon,
-        'redis_cache': redis_cache,
-        'admin_id': ADMIN_USER_ID
-    }
+# --- NEW: Start Priority Queue Workers ---
+db_objects_for_queue = {
+    'db_primary': db_primary,
+    'db_fallback': db_fallback,
+    'db_tertiary': db_tertiary, # Updated Key
+    'redis_cache': redis_cache,
+    'admin_id': ADMIN_USER_ID
+}
     priority_queue.start_workers(bot, dp, db_objects_for_queue)
     logger.info(f"Priority Queue with {QUEUE_CONCURRENCY} workers start ho gaya।")
     # --- END NEW ---
@@ -1033,11 +1033,11 @@ except Exception as e:
 
     # --- NEW: Start Watchdog (Rule: Only ADD new layers/wrappers) ---
     if WATCHDOG_ENABLED:
-         db_objects_for_watchdog = {
-             'db_primary': db_primary,
-             'db_neon': db_neon,
-             'redis_cache': redis_cache,
-         }
+     db_objects_for_watchdog = {
+         'db_primary': db_primary,
+         'db_tertiary': db_tertiary, # Updated Key
+         'redis_cache': redis_cache,
+     }
          # Watchdog ko DP ke baaki objects pass karein
          watchdog = SmartWatchdog(bot, dp, db_objects_for_watchdog)
          watchdog.start()
