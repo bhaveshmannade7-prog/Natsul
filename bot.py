@@ -126,11 +126,10 @@ def get_clean_username_only(identifier: str) -> str | None:
 try:
     BOT_TOKEN = os.environ["BOT_TOKEN"]
     
-    # --- 3 DB Connections ---
-    DATABASE_URL_PRIMARY = os.environ["DATABASE_URL_PRIMARY"]
-    DATABASE_URL_FALLBACK = os.environ["DATABASE_URL_FALLBACK"]
-    NEON_DATABASE_URL = os.environ["NEON_DATABASE_URL"]
-    
+# --- 3 DB Connections ---
+DATABASE_URL_PRIMARY = os.environ["DATABASE_URL_PRIMARY"]
+DATABASE_URL_FALLBACK = os.environ["DATABASE_URL_FALLBACK"]
+DATABASE_URL_TERTIARY = os.environ["DATABASE_URL_TERTIARY"] # Renamed from NEON
     # --- NEW: Redis URL ---
     REDIS_URL = os.getenv("REDIS_URL")
     
