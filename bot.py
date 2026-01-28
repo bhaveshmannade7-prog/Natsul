@@ -2816,8 +2816,10 @@ async def import_json_command(message: types.Message, db_primary: Database, db_f
             # add_movie is an async method in database.py
             db1_tasks.append(safe_db_call(db_primary.add_movie(imdb, title, year, fid_str, message_id, channel_id, clean_title_val, file_unique_id)))
             db2_tasks.append(safe_db_call(db_fallback.add_movie(imdb, title, year, fid_str, message_id, channel_id, clean_title_val, file_unique_id)))
-            # db_neon.add_movie is an async method in neondb.py
-            neon_tasks.append(safe_db_call(db_neon.add_movie(message_id, channel_id, fid_str, file_unique_id, imdb, title)))
+            # REPLACED: Use db_tertiary with correct Mongo args
+            neon_tasks.append(safe_db_call(db_tertiary.add_movie(imdb, title, year, fid_str, message_id, channel_id, clean_title_val, file_unique_id)))
+
+            
             
         except Exception as e: f += 1; logger.error(f"Error processing JSON item {i+1}: {e}", exc_info=False)
         
@@ -2854,7 +2856,7 @@ async def remove_dead_movie_command(message: types.Message, db_primary: Database
     # remove_movie_by_imdb is an async method in database.py/neondb.py
     db1_task = safe_db_call(db_primary.remove_movie_by_imdb(imdb_id))
     db2_task = safe_db_call(db_fallback.remove_movie_by_imdb(imdb_id))
-    neon_task = safe_db_call(db_neon.remove_movie_by_imdb(imdb_id))
+    db3_task = safe_db_call(db_tertiary.remove_movie_by_imdb(imdb_id))
     
     db1_del, db2_del, neon_del = await asyncio.gather(db1_task, db2_task, neon_task)
     
@@ -2871,7 +2873,7 @@ async def remove_dead_movie_command(message: types.Message, db_primary: Database
     
     db1_stat = "✅ M1" if db1_del else "❌ M1"
     db2_stat = "✅ M2" if db2_del else "❌ M2"
-    neon_stat = "✅ Neon" if neon_del else "❌ Neon"
+    db3_stat = "✅ M3" if db3_del else "❌ M3"
     
     await safe_tg_call(msg.edit_text(f"🗑️ **Deletion Report** (<code>{imdb_id}</code>):\n\n{db1_stat} | {db2_stat} | {neon_stat}\n\nSearch index updated."))
 
