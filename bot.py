@@ -2044,86 +2044,49 @@ async def get_movie_callback(callback: types.CallbackQuery, bot: Bot, db_primary
 
 @dp.message(AdminFilter(), F.forward_from_chat)
 @handler_timeout(20)
-async def migration_handler(message: types.Message, bot: Bot, db_primary: Database, db_fallback: Database, db_neon: NeonDB, redis_cache: RedisCacheLayer):
+async def migration_handler(message: types.Message, bot: Bot, db_primary: Database, db_fallback: Database, db_backup: Database, redis_cache: RedisCacheLayer):
     if not message.forward_from_chat or message.forward_from_chat.id != LIBRARY_CHANNEL_ID:
         if LIBRARY_CHANNEL_ID == 0: await safe_tg_call(message.answer("❌ **Configuration Error**: `LIBRARY_CHANNEL_ID` not set."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
         else: await safe_tg_call(message.answer(f"❌ **Invalid Source**: Forward from Library Channel (ID: `{LIBRARY_CHANNEL_ID}`) only."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
     if not (message.video or message.document): return
 
-        # --- FIX START: Filename Fallback for Migration ---
     info = extract_movie_info(message.caption or "")
-    
     if not info or not info.get("title"):
-        # Fallback to filename
         file_obj = message.video or message.document
         if file_obj and hasattr(file_obj, 'file_name') and file_obj.file_name:
             parsed_meta = parse_filename(file_obj.file_name)
-            if parsed_meta.get("title"):
-                info = parsed_meta
+            if parsed_meta.get("title"): info = parsed_meta
 
     if not info or not info.get("title"):
-        logger.warning(f"Migration Skip (Fwd MsgID {message.forward_from_message_id}): Caption/Filename parse nahi kar paya.")
-        await safe_tg_call(message.answer(f"❌ **Parse Error**: Caption missing/invalid for MsgID `{message.forward_from_message_id}`."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
-    # --- FIX END ---
-
-    file_data = message.video or message.document
+        await safe_tg_call(message.answer(f"❌ **Parse Error**: Caption missing for MsgID `{message.forward_from_message_id}`."), semaphore=TELEGRAM_COPY_SEMAPHORE); return
 
     file_data = message.video or message.document
     file_id = file_data.file_id; file_unique_id = file_data.file_unique_id
     message_id = message.forward_from_message_id
     channel_id = message.forward_from_chat.id
-    
     imdb_id = info.get("imdb_id") or f"auto_{message_id}"
     title = info["title"]; year = info.get("year")
-    
     clean_title_val = clean_text_for_search(title)
     
-    # add_movie is an async method in database.py
+    # Teeno MongoDB mein ek saath save karein
     db1_task = safe_db_call(db_primary.add_movie(imdb_id, title, year, file_id, message_id, channel_id, clean_title_val, file_unique_id))
     db2_task = safe_db_call(db_fallback.add_movie(imdb_id, title, year, file_id, message_id, channel_id, clean_title_val, file_unique_id))
-    # db_neon.add_movie is an async method in neondb.py
-    neon_task = safe_db_call(db_neon.add_movie(message_id, channel_id, file_id, file_unique_id, imdb_id, title))
+    db3_task = safe_db_call(db_backup.add_movie(imdb_id, title, year, file_id, message_id, channel_id, clean_title_val, file_unique_id))
     
-    db1_res, db2_res, neon_res = await asyncio.gather(db1_task, db2_task, neon_task)
+    db1_res, db2_res, db3_res = await asyncio.gather(db1_task, db2_task, db3_task)
     
-    def get_status(res):
-        return "✨ Added" if res is True else ("🔄 Updated" if res == "updated" else ("ℹ️ Skipped" if res == "duplicate" else "❌ FAILED"))
+    def get_status(res): return "✨ Added" if res is True else ("🔄 Updated" if res == "updated" else ("ℹ️ Skipped" if res == "duplicate" else "❌ FAILED"))
 
-    db1_status = get_status(db1_res)
-    db2_status = get_status(db2_res)
-    neon_status = "✅ Synced" if neon_res else "❌ FAILED"
-    
-    if db1_res is True:
-        # Fuzzy Cache ko update karein
-        async with FUZZY_CACHE_LOCK:
-            if clean_title_val not in fuzzy_movie_cache:
-                movie_data = {
-                    "imdb_id": imdb_id,
-                    "title": title,
-                    "year": year,
-                    "clean_title": clean_title_val
-                }
-                fuzzy_movie_cache[clean_title_val] = movie_data
-                # --- NEW: Update Redis Cache asynchronously (future-proofing) ---
-                if redis_cache.is_ready():
-                    # Non-blocking background task (Rule 3)
-                    asyncio.create_task(redis_cache.set(f"movie_title_{clean_title_val}", json.dumps(movie_data), ttl=86400))
-                # --- END NEW ---
-
-    # UI Enhancement: Migration result format
     result_text = (
         f"📥 **MIGRATION REPORT**\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"🎬 **Title:** <b>{title}</b>\n"
-        f"🆔 **ID:** <code>{imdb_id}</code>\n\n"
+        f"🎬 **Title:** <b>{title}</b>\n\n"
         f"**Database Sync Status**\n"
-        f"🔹 Primary Node: {db1_status}\n"
-        f"🔹 Fallback Node: {db2_status}\n"
-        f"🔹 Neon Index: {neon_status}"
+        f"🔹 Primary (M1): {get_status(db1_res)}\n"
+        f"🔹 Fallback (M2): {get_status(db2_res)}\n"
+        f"🔹 Backup (M3): {get_status(db3_res)}"
     )
-    
     await safe_tg_call(message.answer(result_text), semaphore=TELEGRAM_COPY_SEMAPHORE)
-
 
 # --- REPLACEMENT CODE FOR auto_index_handler ---
 @dp.channel_post()
