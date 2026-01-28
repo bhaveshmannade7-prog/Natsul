@@ -2858,7 +2858,7 @@ async def remove_dead_movie_command(message: types.Message, db_primary: Database
     db2_task = safe_db_call(db_fallback.remove_movie_by_imdb(imdb_id))
     db3_task = safe_db_call(db_tertiary.remove_movie_by_imdb(imdb_id))
     
-    db1_del, db2_del, neon_del = await asyncio.gather(db1_task, db2_task, neon_task)
+    db1_del, db2_del, db3_del = await asyncio.gather(db1_task, db2_task, db3_task)
     
     if db1_del:
         async with FUZZY_CACHE_LOCK:
@@ -2875,8 +2875,7 @@ async def remove_dead_movie_command(message: types.Message, db_primary: Database
     db2_stat = "✅ M2" if db2_del else "❌ M2"
     db3_stat = "✅ M3" if db3_del else "❌ M3"
     
-    await safe_tg_call(msg.edit_text(f"🗑️ **Deletion Report** (<code>{imdb_id}</code>):\n\n{db1_stat} | {db2_stat} | {neon_stat}\n\nSearch index updated."))
-
+    await safe_tg_call(msg.edit_text(f"🗑️ **Deletion Report** (<code>{imdb_id}</code>):\n\n{db1_stat} | {db2_stat} | {db3_stat}\n\nSearch index updated."))
 
 @dp.message(Command("cleanup_mongo_1"), AdminFilter())
 @handler_timeout(300)
@@ -2906,15 +2905,17 @@ async def cleanup_mongo_2_command(message: types.Message, db_fallback: Database)
 
 @dp.message(Command("remove_library_duplicates"), AdminFilter())
 @handler_timeout(3600)
-async def remove_library_duplicates_command(message: types.Message, status_msg: types.Message, db_primary: Database, db_neon: NeonDB):
+async def remove_library_duplicates_command(message: types.Message, status_msg: types.Message, db_primary: Database, db_tertiary: Database):
     # This function is now correctly wrapped and called as a background task.
-    await safe_tg_call(status_msg.edit_text("🧹 **Library Cleanup**: Scanning NeonDB for duplicates..."))
+    await safe_tg_call(status_msg.edit_text("🧹 **Library Cleanup**: Scanning Tertiary DB for duplicates..."))
     
-    # find_and_delete_duplicates is an async method in neondb.py
-    messages_to_delete, total_duplicates = await safe_db_call(db_neon.find_and_delete_duplicates(batch_limit=100), default=([], 0))
-    
-    if not messages_to_delete:
-        await safe_tg_call(status_msg.edit_text("✅ **Library Clean**: No duplicates found."))
+    # Using Mongo duplicate cleanup logic
+    deleted_count, duplicates_found = await safe_db_call(db_tertiary.cleanup_mongo_duplicates(batch_limit=100), default=(0,0))
+
+    if deleted_count > 0:
+         await safe_tg_call(status_msg.edit_text(f"✅ **M3 Cleaned**\nDeleted: {deleted_count}\nRemaining: {max(0, duplicates_found - deleted_count)}"))
+    else:
+         await safe_tg_call(status_msg.edit_text("✅ **M3 Clean**: No duplicates found."))
         return
         
     await safe_tg_call(status_msg.edit_text(f"⚠️ **Duplicates Found**: {total_duplicates}\n🗑️ Deleting **{len(messages_to_delete)}** messages..."))
