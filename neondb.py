@@ -1,4 +1,6 @@
 # neondb.py - Hybrid Database Wrapper (PostgreSQL + MongoDB)
+# Fixed for Render Deployment & Parsing Errors
+
 import logging
 import asyncio
 import os
@@ -28,8 +30,9 @@ class NeonDB:
         Initializes the Hybrid Database connection.
         Automatically detects if the URL is for PostgreSQL (Neon) or MongoDB.
         """
-        self.database_url = database_url
-        self.db_primary = db_primary_instance # Used for potential cross-DB locks
+        # Strip whitespace to prevent parsing errors
+        self.database_url = database_url.strip() if database_url else ""
+        self.db_primary = db_primary_instance 
         self.mode = self._detect_mode()
         
         # storage handles
@@ -41,17 +44,33 @@ class NeonDB:
         logger.info(f"Initialized NeonDB Wrapper. Detected Mode: {self.mode.upper()}")
 
     def _detect_mode(self) -> str:
-        """Helper to determine DB type from URL string."""
+        """Helper to determine DB type from URL string safely."""
         if not self.database_url:
             return "none"
-        if self.database_url.startswith("mongodb") or "mongo" in self.database_url:
+        
+        url_lower = self.database_url.lower()
+        
+        # Explicit MongoDB check
+        if url_lower.startswith("mongodb") or "mongodb.net" in url_lower:
             return "mongo"
-        if self.database_url.startswith("postgres") or "neon.tech" in self.database_url:
+        
+        # Explicit Postgres check
+        if url_lower.startswith("postgres") or "neon.tech" in url_lower:
             return "postgres"
+            
+        # Fallback based on content (Safe check)
+        if "sslmode" in url_lower: # Postgres usually has sslmode
+            return "postgres"
+            
         return "unknown"
 
     async def init_db(self):
-        """Establishes connection and creates Tables (SQL) or Indexes (NoSQL)."""
+        """Establishes connection based on detected mode."""
+        if self.mode == "none":
+            logger.warning("⚠️ No Backup Database URL provided. Skipping Backup DB.")
+            return
+
+        # --- POSTGRES MODE ---
         if self.mode == "postgres":
             if not asyncpg:
                 logger.critical("❌ CRITICAL: 'asyncpg' library is missing. Install it via pip.")
@@ -67,14 +86,18 @@ class NeonDB:
                 logger.info("✅ Connected to NeonDB (PostgreSQL). Verifying Schema...")
                 await self._create_tables_postgres()
             except Exception as e:
-                logger.error(f"❌ NeonDB (Postgres) Connection Failed: {e}", exc_info=True)
+                # Catch invalid DSN errors specifically to stop crash loop
+                logger.error(f"❌ NeonDB (Postgres) Connection Failed: {e}")
+                logger.error("💡 Check your NEON_DATABASE_URL. It seems invalid for Postgres.")
+                self.mode = "error" # Disable further operations
 
+        # --- MONGO MODE ---
         elif self.mode == "mongo":
             if not AsyncIOMotorClient:
                 logger.critical("❌ CRITICAL: 'motor' or 'pymongo' is missing. Install via pip.")
                 return
             try:
-                # SSL Context for Atlas
+                # SSL Context for Atlas (Required for Render)
                 ca = certifi.where()
                 self.client = AsyncIOMotorClient(
                     self.database_url,
@@ -86,21 +109,24 @@ class NeonDB:
                 await self.client.admin.command('ping')
                 
                 # Setup DB and Collection
-                db_name = "NeonBackupDB" # Fixed name for the backup functionality
+                db_name = "NeonBackupDB"
                 self.db = self.client[db_name]
                 self.collection = self.db["videos"]
                 
-                logger.info(f"✅ Connected to MongoDB (Hybrid Mode). DB: {db_name}")
+                logger.info(f"✅ Connected to MongoDB (Hybrid Backup). DB: {db_name}")
                 await self._create_indexes_mongo()
             except Exception as e:
-                logger.error(f"❌ MongoDB Connection Failed: {e}", exc_info=True)
+                logger.error(f"❌ MongoDB (Backup) Connection Failed: {e}")
+                self.mode = "error" # Disable further operations
+        
         else:
-            logger.warning("⚠️ No valid Database URL provided for NeonDB Backup System.")
+            logger.warning(f"⚠️ Unknown Database URL format: {self.database_url[:10]}... check your .env")
 
     # --- Internal Schema Setup ---
 
     async def _create_tables_postgres(self):
         """Creates the SQL schema required for the bot."""
+        if not self.pool: return
         query = """
         CREATE TABLE IF NOT EXISTS videos (
             id SERIAL PRIMARY KEY,
@@ -112,7 +138,6 @@ class NeonDB:
             title TEXT,
             search_vector tsvector
         );
-        -- Indexes for speed
         CREATE INDEX IF NOT EXISTS idx_videos_search_vector ON videos USING gin(search_vector);
         CREATE INDEX IF NOT EXISTS idx_videos_file_unique_id ON videos(file_unique_id);
         CREATE INDEX IF NOT EXISTS idx_videos_imdb_id ON videos(imdb_id);
@@ -121,61 +146,60 @@ class NeonDB:
             await conn.execute(query)
 
     async def _create_indexes_mongo(self):
-        """Creates NoSQL indexes to mimic SQL performance."""
-        # 1. Unique constraint on file_unique_id (Just like SQL PRIMARY/UNIQUE)
-        await self.collection.create_index("file_unique_id", unique=True)
-        
-        # 2. Compound Text Index for Search
-        # This allows: db.collection.find({$text: {$search: "query"}})
-        await self.collection.create_index(
-            [("title", TEXT), ("imdb_id", TEXT)],
-            name="title_imdb_text_index"
-        )
-        
-        # 3. Standard index for IMDB lookups
-        await self.collection.create_index("imdb_id")
-        logger.info("✅ MongoDB Indexes verified.")
+        """Creates NoSQL indexes."""
+        if self.collection is None: return
+        try:
+            # Unique ID Index
+            await self.collection.create_index("file_unique_id", unique=True)
+            
+            # Text Index for Search
+            await self.collection.create_index(
+                [("title", TEXT), ("imdb_id", TEXT)],
+                name="title_imdb_text_index"
+            )
+            # Standard Index
+            await self.collection.create_index("imdb_id")
+            logger.info("✅ MongoDB Backup Indexes verified.")
+        except Exception as e:
+            logger.warning(f"Index creation warning: {e}")
 
-    # --- PUBLIC METHODS (API) ---
+    # --- PUBLIC METHODS (Safe Wrapped) ---
     
     async def is_ready(self) -> bool:
         """Health check method."""
-        if self.mode == "postgres":
-            return self.pool is not None and not self.pool._closed
-        elif self.mode == "mongo":
-            return self.client is not None
+        if self.mode == "postgres" and self.pool:
+            return not self.pool._closed
+        elif self.mode == "mongo" and self.client:
+            return True # Client doesn't track state easily, assumes alive if init passed
         return False
 
     async def close(self):
         """Gracefully close connections."""
         if self.mode == "postgres" and self.pool:
             await self.pool.close()
-            logger.info("NeonDB (Postgres) pool closed.")
         elif self.mode == "mongo" and self.client:
             self.client.close()
-            logger.info("MongoDB (Hybrid) client closed.")
 
     async def get_movie_count(self) -> int:
-        """Returns total number of files in DB."""
         try:
-            if self.mode == "postgres":
+            if self.mode == "postgres" and self.pool:
                 async with self.pool.acquire() as conn:
                     return await conn.fetchval("SELECT COUNT(*) FROM videos")
-            elif self.mode == "mongo":
+            elif self.mode == "mongo" and self.collection is not None:
                 return await self.collection.count_documents({})
         except Exception as e:
-            logger.error(f"Error getting movie count: {e}")
+            logger.error(f"Error getting movie count (Backup DB): {e}")
             return 0
+        return 0
 
     async def add_movie(self, message_id, channel_id, file_id, file_unique_id, imdb_id, title):
-        """
-        Adds or Updates a movie.
-        SQL: Uses ON CONFLICT DO UPDATE.
-        NoSQL: Uses update_one(upsert=True).
-        """
+        """Adds or Updates a movie."""
+        if self.mode == "error" or self.mode == "none": return False
+
         clean_title = re.sub(r"[._\-]+", " ", title).strip() if title else ""
         
-        if self.mode == "postgres":
+        # --- POSTGRES LOGIC ---
+        if self.mode == "postgres" and self.pool:
             sql = """
             INSERT INTO videos (message_id, channel_id, file_id, file_unique_id, imdb_id, title, search_vector)
             VALUES ($1, $2, $3, $4, $5, $6, to_tsvector('english', $6 || ' ' || COALESCE($5, '')))
@@ -194,8 +218,8 @@ class NeonDB:
                 logger.error(f"Postgres add_movie error: {e}")
                 return False
 
-        elif self.mode == "mongo":
-            # Prepare document
+        # --- MONGO LOGIC ---
+        elif self.mode == "mongo" and self.collection is not None:
             doc = {
                 "message_id": message_id,
                 "channel_id": channel_id,
@@ -203,11 +227,9 @@ class NeonDB:
                 "file_unique_id": file_unique_id,
                 "imdb_id": imdb_id,
                 "title": clean_title,
-                # Adding lowercase fields for better regex search fallback
                 "title_lower": clean_title.lower() if clean_title else ""
             }
             try:
-                # Upsert based on unique ID
                 await self.collection.update_one(
                     {"file_unique_id": file_unique_id},
                     {"$set": doc},
@@ -220,14 +242,11 @@ class NeonDB:
         return False
 
     async def search_video(self, query):
-        """
-        Full Text Search.
-        SQL: Uses to_tsquery.
-        NoSQL: Uses $text index, falls back to Regex.
-        """
+        if self.mode == "error" or self.mode == "none": return []
+
         clean_query = re.sub(r"[._\-]+", " ", query).strip()
         
-        if self.mode == "postgres":
+        if self.mode == "postgres" and self.pool:
             sql = """
             SELECT message_id, channel_id, file_id, title 
             FROM videos 
@@ -238,14 +257,12 @@ class NeonDB:
                 async with self.pool.acquire() as conn:
                     rows = await conn.fetch(sql, clean_query)
                     return [dict(row) for row in rows]
-            except Exception as e:
-                logger.error(f"Postgres search error: {e}")
+            except Exception:
                 return []
 
-        elif self.mode == "mongo":
+        elif self.mode == "mongo" and self.collection is not None:
             try:
-                results = []
-                # 1. Try Text Search (Fastest)
+                # Text Search
                 cursor = self.collection.find(
                     {"$text": {"$search": clean_query}},
                     {"score": {"$meta": "textScore"}}
@@ -253,44 +270,38 @@ class NeonDB:
                 
                 results = await cursor.to_list(length=10)
                 
-                # 2. Fallback: Regex Search (If text search fails or returns nothing)
+                # Regex Fallback
                 if not results:
                     regex_query = re.compile(re.escape(clean_query), re.IGNORECASE)
                     cursor = self.collection.find({"title": regex_query}).limit(10)
                     results = await cursor.to_list(length=10)
-
                 return results
-            except Exception as e:
-                logger.error(f"Mongo search error: {e}")
+            except Exception:
                 return []
         return []
 
     async def remove_movie_by_imdb(self, imdb_id):
-        """Deletes all entries with specific IMDb ID."""
-        if self.mode == "postgres":
+        if self.mode == "postgres" and self.pool:
             try:
                 async with self.pool.acquire() as conn:
                     res = await conn.execute("DELETE FROM videos WHERE imdb_id = $1", imdb_id)
-                    # res format is usually "DELETE count"
                     return "DELETE 0" not in res
-            except Exception as e:
-                logger.error(f"Postgres remove error: {e}")
+            except Exception:
                 return False
         
-        elif self.mode == "mongo":
+        elif self.mode == "mongo" and self.collection is not None:
             try:
                 res = await self.collection.delete_many({"imdb_id": imdb_id})
                 return res.deleted_count > 0
-            except Exception as e:
-                logger.error(f"Mongo remove error: {e}")
+            except Exception:
                 return False
         return False
 
-    # --- ADMIN / MAINTENANCE COMMANDS ---
+    # --- ADMIN / MAINTENANCE ---
 
     async def check_neon_clean_title(self):
-        """Diagnostic: Check if DB has valid data."""
-        if self.mode == "postgres":
+        """Diagnostic."""
+        if self.mode == "postgres" and self.pool:
             try:
                 async with self.pool.acquire() as conn:
                     row = await conn.fetchrow("SELECT title FROM videos LIMIT 1")
@@ -299,22 +310,17 @@ class NeonDB:
             except Exception as e:
                 return {"title": "Error", "clean_title": str(e)}
         
-        elif self.mode == "mongo":
+        elif self.mode == "mongo" and self.collection is not None:
             try:
                 doc = await self.collection.find_one({}, {"title": 1})
                 if doc: return {"title": doc.get('title'), "clean_title": "✅ Mongo Active"}
                 return {"title": "Empty", "clean_title": "⚠️ No Data"}
             except Exception as e:
                 return {"title": "Error", "clean_title": str(e)}
-        return {"title": "Offline", "clean_title": "Check ENV"}
+        return {"title": "Offline", "clean_title": "Check Log/Env"}
 
     async def rebuild_fts_vectors(self):
-        """
-        Rebuilds Search Index.
-        SQL: Updates tsvector column.
-        NoSQL: Drops and Recreates Text Index.
-        """
-        if self.mode == "postgres":
+        if self.mode == "postgres" and self.pool:
             try:
                 async with self.pool.acquire() as conn:
                     await conn.execute("""
@@ -322,47 +328,30 @@ class NeonDB:
                         SET search_vector = to_tsvector('english', title || ' ' || COALESCE(imdb_id, ''))
                     """)
                     return await self.get_movie_count()
-            except Exception as e:
-                logger.error(f"Postgres Rebuild Error: {e}")
+            except Exception:
                 return -1
         
-        elif self.mode == "mongo":
+        elif self.mode == "mongo" and self.collection is not None:
             try:
-                logger.info("Dropping Mongo Text Index...")
-                # Try dropping the index (names might vary, using wildcard logic internally handled by recreate)
                 await self.collection.drop_index("title_imdb_text_index")
-            except OperationFailure:
-                logger.warning("Index didn't exist, creating new one.")
-            except Exception as e:
-                logger.error(f"Index drop failed: {e}")
-            
-            # Recreate
-            await self._create_indexes_mongo()
-            return await self.get_movie_count()
+                await self._create_indexes_mongo()
+                return await self.get_movie_count()
+            except Exception:
+                return -1
         return -1
 
     async def sync_from_mongo(self, mongo_movies_list: List[Dict]):
-        """
-        Imports a large list of movies.
-        Optimized for bulk operations in both DBs.
-        """
-        if not mongo_movies_list: return 0
+        if not mongo_movies_list or self.mode in ["error", "none"]: return 0
         
-        count = 0
-        if self.mode == "postgres":
-            # Postgres: Use executemany for high speed insertion
+        if self.mode == "postgres" and self.pool:
             data_tuples = []
             for m in mongo_movies_list:
                 title = re.sub(r"[._\-]+", " ", m.get('title', '')).strip()
                 imdb = m.get('imdb_id') or f"auto_{m.get('message_id')}"
-                # Tuple order must match SQL params
                 data_tuples.append((
-                    m.get('message_id'), 
-                    m.get('channel_id'), 
-                    m.get('file_id'),
+                    m.get('message_id'), m.get('channel_id'), m.get('file_id'),
                     m.get('file_unique_id') or m.get('file_id'),
-                    imdb, 
-                    title
+                    imdb, title
                 ))
             
             sql = """
@@ -378,13 +367,11 @@ class NeonDB:
                 logger.error(f"Postgres Sync Error: {e}")
                 return 0
 
-        elif self.mode == "mongo":
-            # Mongo: Use bulk_write with UpdateOne (Upsert)
+        elif self.mode == "mongo" and self.collection is not None:
             bulk_ops = []
             for m in mongo_movies_list:
                 fid_unique = m.get('file_unique_id') or m.get('file_id')
                 title = re.sub(r"[._\-]+", " ", m.get('title', '')).strip()
-                
                 doc = {
                     "message_id": m.get('message_id'),
                     "channel_id": m.get('channel_id'),
@@ -394,10 +381,7 @@ class NeonDB:
                     "title": title,
                     "title_lower": title.lower()
                 }
-                
-                bulk_ops.append(
-                    UpdateOne({"file_unique_id": fid_unique}, {"$set": doc}, upsert=True)
-                )
+                bulk_ops.append(UpdateOne({"file_unique_id": fid_unique}, {"$set": doc}, upsert=True))
             
             if bulk_ops:
                 try:
@@ -409,12 +393,7 @@ class NeonDB:
             return 0
 
     async def find_and_delete_duplicates(self, batch_limit=100):
-        """
-        Identifies and removes duplicate files.
-        Logic: Keeps the oldest/first entry, removes subsequent ones with same ID.
-        """
-        if self.mode == "postgres":
-            # Complex Self-Join to find duplicates in SQL
+        if self.mode == "postgres" and self.pool:
             sql = """
             DELETE FROM videos a USING videos b
             WHERE a.id > b.id AND a.file_unique_id = b.file_unique_id
@@ -423,13 +402,11 @@ class NeonDB:
             try:
                 async with self.pool.acquire() as conn:
                     rows = await conn.fetch(sql)
-                    return [], len(rows) # Format: (ignored_list, count)
-            except Exception as e:
-                logger.error(f"Postgres Dedupe Error: {e}")
+                    return [], len(rows)
+            except Exception:
                 return [], 0
 
-        elif self.mode == "mongo":
-            # Aggregation Pipeline to find duplicates
+        elif self.mode == "mongo" and self.collection is not None:
             pipeline = [
                 {"$group": {
                     "_id": "$file_unique_id",
@@ -441,18 +418,12 @@ class NeonDB:
             try:
                 duplicates = await self.collection.aggregate(pipeline).to_list(length=None)
                 deleted_total = 0
-                
                 for group in duplicates:
-                    # Keep the first ID, delete the rest
-                    all_ids = group['ids']
-                    ids_to_delete = all_ids[1:] # Skip first one
-                    
+                    ids_to_delete = group['ids'][1:]
                     if ids_to_delete:
                         res = await self.collection.delete_many({"_id": {"$in": ids_to_delete}})
                         deleted_total += res.deleted_count
-                        
                 return [], deleted_total
-            except Exception as e:
-                logger.error(f"Mongo Dedupe Error: {e}")
+            except Exception:
                 return [], 0
         return [], 0
